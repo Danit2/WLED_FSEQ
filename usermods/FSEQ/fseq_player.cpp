@@ -234,7 +234,7 @@ void FSEQPlayer::loadRecording(const char *filepath, uint16_t startLed,
     frame = file_header.frame_count - 1;
   }
   // Set loop mode if secondsElapsed is exactly 1.0f
-  if (fabs(secondsElapsed - 1.0f) < 0.001f)
+  if (fabs(secondsElapsed - 1.0f) < 0.001f) {
     recordingRepeats = RECORDING_REPEAT_LOOP;
   } else {
     recordingRepeats = RECORDING_REPEAT_DEFAULT;
