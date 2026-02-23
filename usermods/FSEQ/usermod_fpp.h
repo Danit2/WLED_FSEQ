@@ -543,25 +543,7 @@ public:
   // Setup function called once at startup
   void setup() {
     DEBUG_PRINTF("[%s] FPP Usermod loaded\n", _name);
-	#ifdef WLED_USE_SD_SPI
-		int8_t csPin = UsermodFseq::getCsPin();
-		int8_t sckPin = UsermodFseq::getSckPin();
-		int8_t misoPin = UsermodFseq::getMisoPin();
-		int8_t mosiPin = UsermodFseq::getMosiPin();
-		if (!SD.begin(csPin)) {
-		  DEBUG_PRINTF("[%s] ERROR: SD.begin() failed with CS pin %d!\n", _name,
-					   csPin);
-		} else {
-		  DEBUG_PRINTF("[%s] SD card initialized (SPI) with CS pin %d\n", _name,
-					   csPin);
-		}
-	#elif defined(WLED_USE_SD_MMC)
-		if (!SD_MMC.begin()) {
-		  DEBUG_PRINTF("[%s] ERROR: SD_MMC.begin() failed!\n", _name);
-		} else {
-		  DEBUG_PRINTF("[%s] SD card initialized (MMC)\n", _name);
-		}
-	#endif
+
     // Register API endpoints
     server.on("/api/system/info", HTTP_GET,
               [this](AsyncWebServerRequest *request) {

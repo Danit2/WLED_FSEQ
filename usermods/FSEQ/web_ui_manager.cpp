@@ -399,18 +399,23 @@ void WebUIManager::registerEndpoints() {
 	  uint64_t totalBytes = SD_ADAPTER.totalBytes();
 	  uint64_t usedBytes  = SD_ADAPTER.usedBytes();
 
-	  DynamicJsonDocument doc(8192);
-
-	  JsonArray files = doc.createNestedArray("files");
+	  String json = "{";
+	  json += "\"files\":[";
 
 	  if (root && root.isDirectory()) {
-
+		bool first = true;
 		File file = root.openNextFile();
-		while (file) {
 
-		  JsonObject obj = files.createNestedObject();
-		  obj["name"] = file.name();
-		  obj["size"] = file.size() / 1024.0;
+		while (file) {
+		  if (!first) json += ",";
+		  first = false;
+
+		  float sizeKB = file.size() / 1024.0;
+
+		  json += "{";
+		  json += "\"name\":\"" + String(file.name()) + "\",";
+		  json += "\"size\":" + String(sizeKB, 2);
+		  json += "}";
 
 		  file.close();
 		  file = root.openNextFile();
@@ -419,13 +424,12 @@ void WebUIManager::registerEndpoints() {
 
 	  root.close();
 
-	  doc["usedKB"]  = usedBytes / 1024.0;
-	  doc["totalKB"] = totalBytes / 1024.0;
+	  json += "],";
+	  json += "\"usedKB\":" + String(usedBytes / 1024.0, 2) + ",";
+	  json += "\"totalKB\":" + String(totalBytes / 1024.0, 2);
+	  json += "}";
 
-	  String output;
-	  serializeJson(doc, output);
-
-	  request->send(200, "application/json", output);
+	  request->send(200, "application/json", json);
 	});
 
 
