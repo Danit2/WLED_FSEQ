@@ -513,14 +513,13 @@ void sendPingPacket(IPAddress destination = IPAddress(255, 255, 255, 255)) {
       DEBUG_PRINTLN(F("[FPP] ProcessSyncPacket: Sync command received"));
       DEBUG_PRINTF("[FPP] Sync Packet - FileName: %s, Seconds Elapsed: %.2f\n",
                    fileName.c_str(), secondsElapsed);
-      if (!FSEQPlayer::isPlaying() ||
-		FSEQPlayer::getFileName() != fileName) {
-
-		DEBUG_PRINTLN(F("[FPP] Sync: Starting new playback."));
-		FSEQPlayer::loadRecording(fileName.c_str(), 0, strip.getLength(), secondsElapsed);
-	  } else {
-		FSEQPlayer::syncPlayback(secondsElapsed);
-	  }
+      if (!FSEQPlayer::isPlaying()) {
+        DEBUG_PRINTLN(F("[FPP] Sync: Playback not active, starting playback."));
+        FSEQPlayer::loadRecording(fileName.c_str(), 0, strip.getLength(),
+                                  secondsElapsed);
+      } else {
+        FSEQPlayer::syncPlayback(secondsElapsed);
+      }
       break;
     case 3: // SYNC_PKT_OPEN
       DEBUG_PRINTLN(F(

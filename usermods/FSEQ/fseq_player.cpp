@@ -36,33 +36,31 @@ uint16_t FSEQPlayer::buffer_size = 48;
 FSEQPlayer::FileHeader FSEQPlayer::file_header;
 
 inline uint32_t FSEQPlayer::readUInt32() {
-  char buffer[4];
-  if (recordingFile.readBytes(buffer, 4) < 4)
+  uint8_t buffer[4];
+  if (recordingFile.read(buffer, 4) != 4)
     return 0;
   return (uint32_t)buffer[0] | ((uint32_t)buffer[1] << 8) |
          ((uint32_t)buffer[2] << 16) | ((uint32_t)buffer[3] << 24);
 }
 
 inline uint32_t FSEQPlayer::readUInt24() {
-  char buffer[3];
-  if (recordingFile.readBytes(buffer, 3) < 3)
+  uint8_t buffer[3];
+  if (recordingFile.read(buffer, 3) != 3)
     return 0;
   return (uint32_t)buffer[0] | ((uint32_t)buffer[1] << 8) |
          ((uint32_t)buffer[2] << 16);
 }
 
 inline uint16_t FSEQPlayer::readUInt16() {
-  char buffer[2];
-  if (recordingFile.readBytes(buffer, 2) < 2)
+  uint8_t buffer[2];
+  if (recordingFile.read(buffer, 2) != 2)
     return 0;
   return (uint16_t)buffer[0] | ((uint16_t)buffer[1] << 8);
 }
 
 inline uint8_t FSEQPlayer::readUInt8() {
-  char buffer[1];
-  if (recordingFile.readBytes(buffer, 1) < 1)
-    return 0;
-  return (uint8_t)buffer[0];
+  int c = recordingFile.read();
+  return (c < 0) ? 0 : (uint8_t)c;
 }
 
 bool FSEQPlayer::fileOnSD(const char *filepath) {
@@ -111,24 +109,31 @@ void FSEQPlayer::processFrameData() {
 }
 
 bool FSEQPlayer::stopBecauseAtTheEnd() {
-  if (!recordingFile.available()) {
+
+  // If we reached the last frame
+  if (frame >= file_header.frame_count) {
+
     if (recordingRepeats == RECORDING_REPEAT_LOOP) {
-      // Reset file pointer and frame counter for continuous loop
-      recordingFile.seek(0);
       frame = 0;
-    } else if (recordingRepeats > 0) {
-      recordingFile.seek(0);
+      recordingFile.seek(file_header.header_length);
+      return false;
+    }
+
+    if (recordingRepeats > 0) {
       recordingRepeats--;
       frame = 0;
+      recordingFile.seek(file_header.header_length);
       DEBUG_PRINTF("Repeat recording again for: %d\n", recordingRepeats);
-    } else {
-      DEBUG_PRINTLN("Finished playing recording, disabling realtime mode");
-      realtimeLock(10, REALTIME_MODE_INACTIVE);
-      recordingFile.close();
-      clearLastPlayback();
-      return true;
+      return false;
     }
+
+    DEBUG_PRINTLN("Finished playing recording, disabling realtime mode");
+    realtimeLock(10, REALTIME_MODE_INACTIVE);
+    recordingFile.close();
+    clearLastPlayback();
+    return true;
   }
+
   return false;
 }
 
@@ -229,7 +234,7 @@ void FSEQPlayer::loadRecording(const char *filepath, uint16_t startLed,
     frame = file_header.frame_count - 1;
   }
   // Set loop mode if secondsElapsed is exactly 1.0f
-  if (secondsElapsed == 1.0f) {
+  if (fabs(secondsElapsed - 1.0f) < 0.001f) {
     recordingRepeats = RECORDING_REPEAT_LOOP;
   } else {
     recordingRepeats = RECORDING_REPEAT_DEFAULT;
@@ -242,14 +247,13 @@ void FSEQPlayer::clearLastPlayback() {
   for (uint16_t i = playbackLedStart; i < playbackLedStop; i++) {
     setRealtimePixel(i, 0, 0, 0, 0);
   }
-  if (recordingFile)
-    recordingFile.close();
   frame = 0;
+  recordingFile.close();
   currentFileName = "";
 }
 
 bool FSEQPlayer::isPlaying() {
-  return recordingFile && recordingFile.available();
+  return recordingFile && frame < file_header.frame_count;
 }
 
 String FSEQPlayer::getFileName() { return currentFileName; }
