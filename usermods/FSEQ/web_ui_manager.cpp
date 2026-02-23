@@ -529,7 +529,7 @@ void WebUIManager::registerEndpoints() {
       });
 
   // API - Stop FSEQ
-  server.on("/api/fseq/stop", HTTP_POTS, [](AsyncWebServerRequest *request) {
+  server.on("/api/fseq/stop", HTTP_POST, [](AsyncWebServerRequest *request) {
     FSEQPlayer::clearLastPlayback();
     if (realtimeOverride == REALTIME_OVERRIDE_ONCE)
       realtimeOverride = REALTIME_OVERRIDE_NONE;
