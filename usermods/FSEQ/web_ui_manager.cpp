@@ -502,7 +502,7 @@ void WebUIManager::registerEndpoints() {
     String filepath = request->arg("file");
     if (!filepath.startsWith("/"))
       filepath = "/" + filepath;
-    FSEQPlayer::loadRecording(filepath.c_str(), 0, uint16_t(-1), 0.0f);
+    FSEQPlayer::loadRecording(filepath.c_str(), 0, uint16_t(-1), 0.0f, false);
     request->send(200, "text/plain", "FSEQ started");
   });
 
@@ -517,7 +517,7 @@ void WebUIManager::registerEndpoints() {
         if (!filepath.startsWith("/"))
           filepath = "/" + filepath;
         // Passing 1.0f enables loop mode in loadRecording()
-        FSEQPlayer::loadRecording(filepath.c_str(), 0, uint16_t(-1), 1.0f);
+        FSEQPlayer::loadRecording(filepath.c_str(), 0, uint16_t(-1), 1.0f, true);
         request->send(200, "text/plain", "FSEQ loop started");
       });
 

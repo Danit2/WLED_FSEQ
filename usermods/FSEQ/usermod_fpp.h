@@ -443,11 +443,11 @@ void sendPingPacket(IPAddress destination = IPAddress(255, 255, 255, 255)) {
   // UDP - process received packet
   void processUdpPacket(AsyncUDPPacket packet) {
     // Print the raw UDP packet in hex format for debugging
-    DEBUG_PRINTLN(F("[FPP] Raw UDP Packet:"));
-    for (size_t i = 0; i < packet.length(); i++) {
-      DEBUG_PRINTF("%02X ", packet.data()[i]);
-    }
-    DEBUG_PRINTLN();
+    //  DEBUG_PRINTLN(F("[FPP] Raw UDP Packet:"));
+    //for (size_t i = 0; i < packet.length(); i++) {
+    //   DEBUG_PRINTF("%02X ", packet.data()[i]);
+    // }
+    // DEBUG_PRINTLN();
 
     if (packet.length() < 4)
       return;
@@ -739,9 +739,6 @@ public:
           lastPingTime = millis();
       }
     }
-	
-    // Process FSEQ playback
-    //FSEQPlayer::handlePlayRecording();
   }
 
   uint16_t getId() { return USERMOD_ID_SD_CARD; }
