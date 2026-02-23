@@ -229,7 +229,7 @@ function toggleNormal(name, playBtn, loopBtn) {
 
   } else {
 
-    fetch('/api/fseq/stop');
+    fetch('/api/fseq/stop', {method:'POST', headers:{'Content-Type':'application/x-www-form-urlencoded'}})
     resetAllFseqButtons();
   }
 }
@@ -250,7 +250,7 @@ function toggleLoop(name, playBtn, loopBtn) {
 
   } else {
 
-    fetch('/api/fseq/stop', {method:'POST', headers:{'Content-Type':'application/x-www-form-urlencoded'}, body:'file='+encodeURIComponent(name)})
+    fetch('/api/fseq/stop', {method:'POST', headers:{'Content-Type':'application/x-www-form-urlencoded'}})
     resetAllFseqButtons();
   }
 }

@@ -78,7 +78,7 @@ private:
 #define CTRL_PKT_BLANK 3
 
 // UDP port for FPP discovery/synchronization
-inline constexpr uint16_t UDP_SYNC_PORT = 32320;
+const uint16_t UDP_SYNC_PORT = 32320;
 
 inline unsigned long lastPingTime = 0;
 inline constexpr unsigned long pingInterval = 5000;
