@@ -207,7 +207,6 @@ private:
 
 		uint32_t mins = elapsed / 60;
 		uint32_t secs = elapsed % 60;
-		char timeStr[6];
 		char timeStr[16];
         snprintf(timeStr, sizeof(timeStr), "%02u:%02u", mins, secs);
 
