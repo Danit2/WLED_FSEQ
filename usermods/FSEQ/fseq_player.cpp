@@ -88,7 +88,7 @@ void FSEQPlayer::processFrameData() {
   uint32_t packetLength = file_header.channel_count;
   uint16_t lastLed =
       min((uint32_t)playbackLedStop, (uint32_t)playbackLedStart + (packetLength / 3));
-  char frame_data[48];
+  char frame_data[buffer_size];
   CRGB *crgb = reinterpret_cast<CRGB *>(frame_data);
   uint32_t bytes_remaining = packetLength;
   uint16_t index = playbackLedStart;
