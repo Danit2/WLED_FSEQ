@@ -37,7 +37,7 @@ FSEQPlayer::FileHeader FSEQPlayer::file_header;
 
 inline uint32_t FSEQPlayer::readUInt32() {
   uint8_t buffer[4];
-  if (recordingFile.readBytes(buffer, 4) < 4)
+  if (recordingFile.read(buffer, 4) != 4)
     return 0;
   return (uint32_t)buffer[0] | ((uint32_t)buffer[1] << 8) |
          ((uint32_t)buffer[2] << 16) | ((uint32_t)buffer[3] << 24);
@@ -45,7 +45,7 @@ inline uint32_t FSEQPlayer::readUInt32() {
 
 inline uint32_t FSEQPlayer::readUInt24() {
   uint8_t buffer[3];
-  if (recordingFile.readBytes(buffer, 3) < 3)
+  if (recordingFile.read(buffer, 3) != 3)
     return 0;
   return (uint32_t)buffer[0] | ((uint32_t)buffer[1] << 8) |
          ((uint32_t)buffer[2] << 16);
@@ -53,16 +53,14 @@ inline uint32_t FSEQPlayer::readUInt24() {
 
 inline uint16_t FSEQPlayer::readUInt16() {
   uint8_t buffer[2];
-  if (recordingFile.readBytes(buffer, 2) < 2)
+  if (recordingFile.read(buffer, 2) != 2)
     return 0;
   return (uint16_t)buffer[0] | ((uint16_t)buffer[1] << 8);
 }
 
 inline uint8_t FSEQPlayer::readUInt8() {
-  uint8_t buffer[1];
-  if (recordingFile.readBytes(buffer, 1) < 1)
-    return 0;
-  return (uint8_t)buffer[0];
+  int c = recordingFile.read();
+  return (c < 0) ? 0 : (uint8_t)c;
 }
 
 bool FSEQPlayer::fileOnSD(const char *filepath) {
@@ -236,7 +234,7 @@ void FSEQPlayer::loadRecording(const char *filepath, uint16_t startLed,
     frame = file_header.frame_count - 1;
   }
   // Set loop mode if secondsElapsed is exactly 1.0f
-  if (secondsElapsed == 1.0f) {
+  if (fabs(secondsElapsed - 1.0f) < 0.001f)
     recordingRepeats = RECORDING_REPEAT_LOOP;
   } else {
     recordingRepeats = RECORDING_REPEAT_DEFAULT;
@@ -249,8 +247,6 @@ void FSEQPlayer::clearLastPlayback() {
   for (uint16_t i = playbackLedStart; i < playbackLedStop; i++) {
     setRealtimePixel(i, 0, 0, 0, 0);
   }
-  if (recordingFile)
-    recordingFile.close();
   frame = 0;
   currentFileName = "";
 }
