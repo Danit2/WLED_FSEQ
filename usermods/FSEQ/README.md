@@ -4,7 +4,7 @@
 
 Welcome to the **Usermod FSEQ** project! This innovative module empowers your WLED setup by enabling FSEQ file playback from an SD card, complete with a sleek web UI and UDP remote control. Dive into a world where creativity meets functionality and transform your lighting experience.
 
-# SWEB UI http://yourIP/sd/ui
+# FSEQ WEB UI http://yourIP/fsequi
 
 # SD & FSEQ Usermod for WLED
 
@@ -23,51 +23,21 @@ This usermod adds support for playing FSEQ files from an SD card and provides a 
 
 ## Installation
 
-### 1. Configure PlatformIO
+### Configure PlatformIO
 
 Add the following configuration to your `platformio_override.ini` (or `platformio.ini`) file:
 
 ```ini
 [env:esp32dev_V4]
-build_flags = 
-  -D WLED_USE_SD_SPI
-  -D USERMOD_FPP
-  -D USERMOD_FSEQ
-  -I wled00/src/dependencies/json
-  ; optional:
-  ; -D WLED_DEBUG
+custom_usermods = FSEQ
+```
+
+If you use SD over SPI it will automaticly add the `-D WLED_USE_SD_SPI` flag as standard
+
+Only if you use MMC you have to set the build flag `-D WLED_USE_SD_MMC`
 
 
-### 2. Update the WLED Web Interface (Optional)
-
-To integrate the new FSEQ functionality into the WLED UI, add a new button to the navigation area in your `wled00/data/index.htm` file. For example:
-
-<!-- New button for SD & FSEQ Manager -->
-<button onclick="window.location.href=getURL('/fsequi');">
-  <i class="icons">&#xe0d2;</i>
-  <p class="tab-label">Fseq</p>
-</button>
-
-### 3. Modify usermods_list.cpp
-
-Register the FSEQ usermod by adding the following lines to `usermods_list.cpp`. Ensure no conflicting modules are included:
-
-```cpp
-#ifdef USERMOD_FSEQ
-  #include "../usermods/FSEQ/usermod_fseq.h"
-#endif
-
-#ifdef USERMOD_FSEQ
-  UsermodManager::add(new UsermodFseq());
-#endif
-
-// Remove or comment out any conflicting SD card usermod:
-// //#include "../usermods/sd_card/usermod_sd_card.h"
-// //#ifdef SD_ADAPTER
-// //UsermodManager::add(new UsermodSdCard());
-// //#endif
-
-HTTP Endpoints
+## The new Endpoints
 
 The following endpoints are available:
 	• GET /sd/ui  
@@ -107,7 +77,8 @@ int8_t UsermodFseq::configPinPoci         = 19;
 int8_t UsermodFseq::configPinPico         = 23;
 #endif
 
-These values can be modified via WLED’s configuration JSON using the addToConfig() and readFromConfig() methods. This allows you to change the pin settings without recompiling the firmware.
+These values can be modified via WLED’s Usermode tab in the settings. This allows you to change the pin settings without recompiling the firmware.
+After the changes, you have to reboote you device.
 
 Summary
 

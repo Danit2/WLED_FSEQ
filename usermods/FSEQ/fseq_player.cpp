@@ -249,7 +249,7 @@ void FSEQPlayer::clearLastPlayback() {
 }
 
 bool FSEQPlayer::isPlaying() {
-  return recordingFile && frame < file_header.frame_count;
+  return recordingFile && recordingFile.available();
 }
 
 String FSEQPlayer::getFileName() { return currentFileName; }
