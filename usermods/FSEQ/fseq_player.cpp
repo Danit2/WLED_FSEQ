@@ -85,21 +85,21 @@ void FSEQPlayer::printHeaderInfo() {
 }
 
 void FSEQPlayer::processFrameData() {
-  uint16_t packetLength = file_header.channel_count;
+  uint32_t packetLength = file_header.channel_count;
   uint16_t lastLed =
-      min(playbackLedStop, uint16_t(playbackLedStart + (packetLength / 3)));
-  char frame_data[buffer_size];
+      min((uint32_t)playbackLedStop, (uint32_t)playbackLedStart + (packetLength / 3));
+  char frame_data[48];
   CRGB *crgb = reinterpret_cast<CRGB *>(frame_data);
-  uint16_t bytes_remaining = packetLength;
+  uint32_t bytes_remaining = packetLength;
   uint16_t index = playbackLedStart;
   while (index < lastLed && bytes_remaining > 0) {
-    uint16_t length = min(bytes_remaining, buffer_size);
+    uint16_t length = (uint16_t)min(bytes_remaining, (uint32_t)sizeof(frame_data));
     recordingFile.readBytes(frame_data, length);
     bytes_remaining -= length;
     for (uint16_t offset = 0; offset < length / 3; offset++) {
       setRealtimePixel(index, crgb[offset].r, crgb[offset].g, crgb[offset].b,
                        0);
-      if (++index > lastLed)
+      if (++index >= lastLed)
         break;
     }
   }
@@ -129,7 +129,6 @@ bool FSEQPlayer::stopBecauseAtTheEnd() {
 
     DEBUG_PRINTLN("Finished playing recording, disabling realtime mode");
     realtimeLock(10, REALTIME_MODE_INACTIVE);
-    recordingFile.close();
     clearLastPlayback();
     return true;
   }
@@ -168,7 +167,6 @@ void FSEQPlayer::loadRecording(const char *filepath,
 {
   if (recordingFile.available()) {
     clearLastPlayback();
-    recordingFile.close();
   }
   playbackLedStart = startLed;
   playbackLedStop = stopLed;
@@ -187,6 +185,10 @@ void FSEQPlayer::loadRecording(const char *filepath,
       currentFileName = currentFileName.substring(1);
   } else if (fileOnFS(filepath)) {
     DEBUG_PRINTF("Read file from FS: %s\n", filepath);
+	recordingFile = WLED_FS.open(filepath, "rb");
+    currentFileName = String(filepath);
+    if (currentFileName.startsWith("/"))
+      currentFileName = currentFileName.substring(1);
   } else {
     DEBUG_PRINTF("File %s not found (%s)\n", filepath,
                  USED_STORAGE_FILESYSTEMS);
