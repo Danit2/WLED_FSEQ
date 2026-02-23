@@ -219,7 +219,7 @@ function toggleNormal(name, playBtn, loopBtn) {
 
   if (!isPlaying) {
 
-    fetch('/api/fseq/start', {method:'POST', headers:{'Content-Type':'application/x-www-form-urlencoded'}, body:'path='+encodeURIComponent(name)})
+    fetch('/api/fseq/start', {method:'POST', headers:{'Content-Type':'application/x-www-form-urlencoded'}, body:'file='+encodeURIComponent(name)})
 
     resetAllFseqButtons();
 
@@ -240,7 +240,7 @@ function toggleLoop(name, playBtn, loopBtn) {
 
   if (!isLooping) {
 
-    fetch('/api/fseq/startloop', {method:'POST', headers:{'Content-Type':'application/x-www-form-urlencoded'}, body:'path='+encodeURIComponent(name)})
+    fetch('/api/fseq/startloop', {method:'POST', headers:{'Content-Type':'application/x-www-form-urlencoded'}, body:'file='+encodeURIComponent(name)})
 
     resetAllFseqButtons();
 
@@ -250,7 +250,7 @@ function toggleLoop(name, playBtn, loopBtn) {
 
   } else {
 
-    fetch('/api/fseq/stop', {method:'POST', headers:{'Content-Type':'application/x-www-form-urlencoded'}, body:'path='+encodeURIComponent(name)})
+    fetch('/api/fseq/stop', {method:'POST', headers:{'Content-Type':'application/x-www-form-urlencoded'}, body:'file='+encodeURIComponent(name)})
     resetAllFseqButtons();
   }
 }
