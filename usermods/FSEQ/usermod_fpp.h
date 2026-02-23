@@ -78,7 +78,7 @@ private:
 #define CTRL_PKT_BLANK 3
 
 // UDP port for FPP discovery/synchronization
-const uint16_t UDP_SYNC_PORT = 32320;
+inline constexpr uint16_t UDP_SYNC_PORT = 32320;
 
 inline unsigned long lastPingTime = 0;
 inline constexpr unsigned long pingInterval = 5000;
@@ -459,10 +459,6 @@ void sendPingPacket(IPAddress destination = IPAddress(255, 255, 255, 255)) {
     uint8_t packetType = packet.data()[4];
     switch (packetType) {
     case CTRL_PKT_SYNC: {
-      if (packet.length() < sizeof(FPPMultiSyncPacket)) {
-        DEBUG_PRINTLN(F("[FPP] Sync packet too short, ignoring"));
-        break;
-      }
       FPPMultiSyncPacket *syncPacket =
           reinterpret_cast<FPPMultiSyncPacket *>(packet.data());
       DEBUG_PRINTLN(F("[FPP] Received UDP sync packet"));
