@@ -741,7 +741,7 @@ public:
     }
 	
     // Process FSEQ playback
-    FSEQPlayer::handlePlayRecording();
+    //FSEQPlayer::handlePlayRecording();
   }
 
   uint16_t getId() { return USERMOD_ID_SD_CARD; }
