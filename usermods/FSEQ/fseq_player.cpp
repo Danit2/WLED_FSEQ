@@ -248,6 +248,7 @@ void FSEQPlayer::clearLastPlayback() {
     setRealtimePixel(i, 0, 0, 0, 0);
   }
   frame = 0;
+  recordingFile.close();
   currentFileName = "";
 }
 

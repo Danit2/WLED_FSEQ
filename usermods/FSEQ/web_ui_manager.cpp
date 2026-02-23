@@ -259,7 +259,27 @@ function checkFseqStatus(){
   fetch('/api/fseq/status')
     .then(r=>r.json())
     .then(status=>{
-      if(!status.playing) resetAllFseqButtons();
+
+      if(!status.playing){
+        resetAllFseqButtons();
+        return;
+      }
+
+      document.querySelectorAll("#fseqList li").forEach(li=>{
+        const name = li.querySelector("div").textContent;
+
+        if(name === status.file){
+
+          const btns = li.querySelectorAll("button");
+
+          btns.forEach(btn=>{
+            btn.classList.add("btn-stop");
+            btn.textContent = "Stop";
+            btn.dataset.state = "playing";
+          });
+        }
+      });
+
     });
 }
 
@@ -517,10 +537,21 @@ void WebUIManager::registerEndpoints() {
 
   // API - FSEQ Status
   server.on("/api/fseq/status", HTTP_GET, [](AsyncWebServerRequest *request) {
+
     bool playing = FSEQPlayer::isPlaying();
-    String json = "{\"playing\":";
+    String file = FSEQPlayer::getFileName();
+
+    String json = "{";
+    json += "\"playing\":";
     json += (playing ? "true" : "false");
+    json += ",";
+
+    json += "\"file\":\"";
+    json += file;
+    json += "\"";
+
     json += "}";
+
     request->send(200, "application/json", json);
   });
 }
