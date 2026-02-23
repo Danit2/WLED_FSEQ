@@ -8,7 +8,7 @@
 #define RECORDING_REPEAT_DEFAULT 0
 #endif
 #ifndef REALTIME_MODE_FSEQ
-#define REALTIME_MODE_FSEQ 3
+#define REALTIME_MODE_FSEQ 10
 #endif
 
 #include "wled.h"
