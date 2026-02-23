@@ -85,36 +85,24 @@ void FSEQPlayer::printHeaderInfo() {
 }
 
 void FSEQPlayer::processFrameData() {
-
-  uint32_t packetLength = file_header.channel_count;
-
-  uint32_t maxLedsFromFrame = packetLength / 3;
-
-  uint16_t lastLed = playbackLedStart + maxLedsFromFrame;
-  if (lastLed > playbackLedStop)
-    lastLed = playbackLedStop;
-
-  static uint8_t frame_data[48];   // besser als char
-  uint32_t bytes_remaining = packetLength;
+  uint16_t packetLength = file_header.channel_count;
+  uint16_t lastLed =
+      min(playbackLedStop, uint16_t(playbackLedStart + (packetLength / 3)));
+  char frame_data[buffer_size];
+  CRGB *crgb = reinterpret_cast<CRGB *>(frame_data);
+  uint16_t bytes_remaining = packetLength;
   uint16_t index = playbackLedStart;
-
   while (index < lastLed && bytes_remaining > 0) {
-
-    uint16_t length = min(bytes_remaining, (uint32_t)sizeof(frame_data));
+    uint16_t length = min(bytes_remaining, buffer_size);
     recordingFile.readBytes(frame_data, length);
     bytes_remaining -= length;
-
-    uint16_t pixels = length / 3;
-
-    for (uint16_t offset = 0; offset < pixels && index < lastLed; offset++) {
-      setRealtimePixel(index++,
-                       frame_data[offset * 3 + 0],
-                       frame_data[offset * 3 + 1],
-                       frame_data[offset * 3 + 2],
+    for (uint16_t offset = 0; offset < length / 3; offset++) {
+      setRealtimePixel(index, crgb[offset].r, crgb[offset].g, crgb[offset].b,
                        0);
+      if (++index > lastLed)
+        break;
     }
   }
-
   strip.show();
   realtimeLock(3000, REALTIME_MODE_FSEQ);
   next_time = now + file_header.step_time;
