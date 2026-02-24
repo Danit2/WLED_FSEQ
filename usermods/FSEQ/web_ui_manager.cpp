@@ -236,7 +236,7 @@ function toggleNormal(name, playBtn, loopBtn) {
 
 function toggleLoop(name, playBtn, loopBtn) {
 
-  const isLooping = loopBtn.dataset.state === "looping";
+  const isLooping = loopBtn.dataset.state === "playing";
 
   if (!isLooping) {
 
