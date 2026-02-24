@@ -399,23 +399,22 @@ void WebUIManager::registerEndpoints() {
 	  uint64_t totalBytes = SD_ADAPTER.totalBytes();
 	  uint64_t usedBytes  = SD_ADAPTER.usedBytes();
 
-	  AsyncJsonResponse *response = new AsyncJsonResponse(false, 4096);
-	  JsonObject rootObj = response->getRoot();
+	  // Adjust size if needed (depends on max file count)
+	  DynamicJsonDocument doc(8192);
+
+	  JsonObject rootObj = doc.to<JsonObject>();
 	  JsonArray files = rootObj.createNestedArray("files");
 
 	  if (root && root.isDirectory()) {
 
 		File file = root.openNextFile();
 		while (file) {
+			
+		  String name = file.name();
 
-		  if (!file.isDirectory()) {
-
-			String name = String(file.name());
-
-			JsonObject obj = files.createNestedObject();
-			obj["name"] = name;
-			obj["size"] = (float)file.size() / 1024.0;
-		  }
+		  JsonObject obj = files.createNestedObject();
+		  obj["name"] = name;
+		  obj["size"] = (float)file.size() / 1024.0;
 
 		  file.close();
 		  file = root.openNextFile();
@@ -427,7 +426,10 @@ void WebUIManager::registerEndpoints() {
 	  rootObj["usedKB"]  = (float)usedBytes / 1024.0;
 	  rootObj["totalKB"] = (float)totalBytes / 1024.0;
 
-	  request->send(response);
+	  String output;
+	  serializeJson(doc, output);
+
+	  request->send(200, "application/json", output);
 	});
 
 
