@@ -482,7 +482,7 @@ void WebUIManager::registerEndpoints() {
           request->_tempObject = nullptr;
           request->send(500, "text/plain", "Failed to open file for writing");
           return;
-+        }
+        }
         }
         File *f = static_cast<File*>(request->_tempObject);
         if (f && *f) {
@@ -535,7 +535,6 @@ void WebUIManager::registerEndpoints() {
         String filepath = request->arg("file");
         if (!filepath.startsWith("/"))
           filepath = "/" + filepath;
-        // Passing 1.0f enables loop mode in loadRecording()
         FSEQPlayer::loadRecording(filepath.c_str(), 0, uint16_t(-1), 0.0f, true);
         request->send(200, "text/plain", "FSEQ loop started");
       });
