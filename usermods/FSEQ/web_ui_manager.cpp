@@ -427,7 +427,6 @@ void WebUIManager::registerEndpoints() {
 	  rootObj["usedKB"]  = (float)usedBytes / 1024.0;
 	  rootObj["totalKB"] = (float)totalBytes / 1024.0;
 
-	  response->setLength();
 	  request->send(response);
 	});
 
