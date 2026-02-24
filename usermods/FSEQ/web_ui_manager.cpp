@@ -428,6 +428,11 @@ void WebUIManager::registerEndpoints() {
 
 	  String output;
 	  serializeJson(doc, output);
+	  
+	  if (doc.overflowed()) {
+      request->send(507, "text/plain", "JSON buffer too small; file list may be truncated");
+      return;
+      }
 
 	  request->send(200, "application/json", output);
 	});
