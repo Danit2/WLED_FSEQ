@@ -142,7 +142,7 @@ private:
     else { major = ver.toInt(); }
     doc["majorVersion"] = major;
     doc["minorVersion"] = minor;
-    doc["typeId"] = 251;
+    doc["typeId"] = 195;
     doc["UUID"] = WiFi.macAddress();
 
     JsonObject utilization = doc.createNestedObject("Utilization");
@@ -186,7 +186,7 @@ private:
 	  // --------------------------------------------------
 	  doc["volume"] = 70;
 	  doc["media_filename"] = "";
-	  doc["fppd"] = "idle";
+	  doc["fppd"] = "running";
 	  doc["current_song"] = "";
 
 	  if (FSEQPlayer::isPlaying()) {
@@ -268,7 +268,7 @@ private:
 
 	  adv["majorVersion"] = major;
 	  adv["minorVersion"] = minor;
-	  adv["typeId"] = 251;
+	  adv["typeId"] = 195;
 	  adv["UUID"] = WiFi.macAddress();
 
 	  JsonObject util = adv.createNestedObject("Utilization");
@@ -305,7 +305,7 @@ private:
 	  sys["ip"] = WiFi.localIP().toString();
 	  sys["version"] = versionString;
 	  sys["hardwareType"] = "WLED";
-	  sys["type"] = 251;
+	  sys["type"] = 195;
 	  sys["num_chan"] = strip.getLength() * 3;
 	  sys["NumPixelPort"] = 1;
 	  sys["NumSerialPort"] = 0;
@@ -339,7 +339,7 @@ void sendPingPacket(IPAddress destination = IPAddress(255, 255, 255, 255)) {
   buf[7] = 0x03;  // Ping packet version = 3
   buf[8] = 0x00;  // SubType = Ping
 
-  buf[9] = 0xFB;  // Hardware Type = WLED
+  buf[9] = 0xC3;  // Hardware Type = ESPixelStick
 
   // --------------------------------------------------
   // Version (MSB first!)
