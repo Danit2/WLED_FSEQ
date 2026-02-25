@@ -114,6 +114,20 @@ private:
   unsigned long uploadStartTime = 0;
   WriteBufferingStream *uploadStream = nullptr;
 
+  String id = WiFi.macAddress();
+  id.replace(":", "");
+  id = "WLED-" + id;
+
+  String devName = getDeviceName();
+
+  uint16_t major = 0, minor = 0;
+  String ver = versionString;
+  int dashPos = ver.indexOf('-');
+  if (dashPos > 0) ver = ver.substring(0, dashPos);
+  int dotPos = ver.indexOf('.');
+  if (dotPos > 0) { major = ver.substring(0, dotPos).toInt(); minor = ver.substring(dotPos + 1).toInt(); }
+  else { major = ver.toInt(); }
+
   // Returns device name from server description
   String getDeviceName() { return String(serverDescription); }
 
@@ -121,22 +135,13 @@ private:
   String buildSystemInfoJSON() {
     DynamicJsonDocument doc(1024);
 
-    String devName = getDeviceName();
-
-    doc["HostName"] = devName;
-    doc["HostDescription"] = "WLED";
+    doc["HostName"] = id;
+    doc["HostDescription"] = devName;
     doc["Platform"] = "ESP32";
     doc["Variant"] = "WLED";
     doc["Mode"] = "remote";
     doc["Version"] = versionString;
     
-	uint16_t major = 0, minor = 0;
-    String ver = versionString;
-    int dashPos = ver.indexOf('-');
-    if (dashPos > 0) ver = ver.substring(0, dashPos);
-    int dotPos = ver.indexOf('.');
-    if (dotPos > 0) { major = ver.substring(0, dotPos).toInt(); minor = ver.substring(dotPos + 1).toInt(); }
-    else { major = ver.toInt(); }
     doc["majorVersion"] = major;
     doc["minorVersion"] = minor;
     doc["typeId"] = 195;
@@ -233,31 +238,12 @@ private:
 	  // --------------------------------------------------
 	  JsonObject adv = doc.createNestedObject("advancedView");
 
-	  adv["HostName"] = getDeviceName();
-	  adv["HostDescription"] = "WLED";
+	  adv["HostName"] = id;
+	  adv["HostDescription"] = devName;
 	  adv["Platform"] = "WLED";
 	  adv["Variant"] = "ESP32";
 	  adv["Mode"] = "remote";
 	  adv["Version"] = versionString;
-
-	  // Version aus versionString extrahieren (z.B. 16.0-alpha)
-	  uint16_t major = 0;
-	  uint16_t minor = 0;
-
-	  String ver = versionString;
-	  int dashPos = ver.indexOf('-');
-	  if (dashPos > 0) {
-		ver = ver.substring(0, dashPos);
-	  }
-
-	  int dotPos = ver.indexOf('.');
-	  if (dotPos > 0) {
-		major = ver.substring(0, dotPos).toInt();
-		minor = ver.substring(dotPos + 1).toInt();
-	  } else {
-		major = ver.toInt();
-		minor = 0;
-	  }
 
 	  adv["majorVersion"] = major;
 	  adv["minorVersion"] = minor;
@@ -291,7 +277,7 @@ private:
 	  String devName = getDeviceName();
 
 	  sys["hostname"] = devName;
-	  sys["id"] = WiFi.macAddress();
+	  sys["id"] = id;
 	  sys["ip"] = WiFi.localIP().toString();
 	  sys["version"] = versionString;
 	  sys["hardwareType"] = "WLED";
@@ -331,29 +317,10 @@ void sendPingPacket(IPAddress destination = IPAddress(255, 255, 255, 255)) {
 
   buf[9] = 0xC3;  // Hardware Type = ESPixelStick ESP32
 
-  // --------------------------------------------------
-  // Version (MSB first!)
-  // --------------------------------------------------
-  uint16_t versionMajor = 0;
-  uint16_t versionMinor = 0;
-
-  String ver = versionString;
-
-  int dashPos = ver.indexOf('-');
-  if (dashPos > 0) {
-    ver = ver.substring(0, dashPos);
-  }
-
-  int dotPos = ver.indexOf('.');
-  if (dotPos > 0) {
-	versionMajor = ver.substring(0, dotPos).toInt();
-	versionMinor = ver.substring(dotPos + 1).toInt();
-  }
-
-  buf[10] = (versionMajor >> 8) & 0xFF;
-  buf[11] = versionMajor & 0xFF;
-  buf[12] = (versionMinor >> 8) & 0xFF;
-  buf[13] = versionMinor & 0xFF;
+  buf[10] = (major >> 8) & 0xFF;
+  buf[11] = major & 0xFF;
+  buf[12] = (minor >> 8) & 0xFF;
+  buf[13] = minor & 0xFF;
 
   // --------------------------------------------------
   // Operating Mode Flags
@@ -373,7 +340,7 @@ void sendPingPacket(IPAddress destination = IPAddress(255, 255, 255, 255)) {
   // --------------------------------------------------
   // Hostname (19-83) 64 bytes + NULL
   // --------------------------------------------------
-  String hostName = getDeviceName();
+  String hostName = devName;
   if (hostName.length() > 64)
     hostName = hostName.substring(0, 64);
 
