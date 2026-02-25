@@ -114,26 +114,17 @@ private:
   unsigned long uploadStartTime = 0;
   WriteBufferingStream *uploadStream = nullptr;
 
-  String id = WiFi.macAddress();
-  id.replace(":", "");
-  id = "WLED-" + id;
-
-  String devName = getDeviceName();
-
-  uint16_t major = 0, minor = 0;
-  String ver = versionString;
-  int dashPos = ver.indexOf('-');
-  if (dashPos > 0) ver = ver.substring(0, dashPos);
-  int dotPos = ver.indexOf('.');
-  if (dotPos > 0) { major = ver.substring(0, dotPos).toInt(); minor = ver.substring(dotPos + 1).toInt(); }
-  else { major = ver.toInt(); }
-
   // Returns device name from server description
   String getDeviceName() { return String(serverDescription); }
 
   // Build JSON with system information
   String buildSystemInfoJSON() {
     DynamicJsonDocument doc(1024);
+
+    String devName = getDeviceName();
+
+	String id = "WLED-" + WiFi.macAddress();
+    id.replace(":", "");
 
     doc["HostName"] = id;
     doc["HostDescription"] = devName;
@@ -142,6 +133,13 @@ private:
     doc["Mode"] = "remote";
     doc["Version"] = versionString;
     
+	uint16_t major = 0, minor = 0;
+    String ver = versionString;
+    int dashPos = ver.indexOf('-');
+    if (dashPos > 0) ver = ver.substring(0, dashPos);
+    int dotPos = ver.indexOf('.');
+    if (dotPos > 0) { major = ver.substring(0, dotPos).toInt(); minor = ver.substring(dotPos + 1).toInt(); }
+    else { major = ver.toInt(); }
     doc["majorVersion"] = major;
     doc["minorVersion"] = minor;
     doc["typeId"] = 195;
@@ -238,12 +236,36 @@ private:
 	  // --------------------------------------------------
 	  JsonObject adv = doc.createNestedObject("advancedView");
 
+      String devName = getDeviceName();
+		
+      String id = "WLED-" + WiFi.macAddress();
+      id.replace(":", "");
+		
 	  adv["HostName"] = id;
 	  adv["HostDescription"] = devName;
 	  adv["Platform"] = "WLED";
 	  adv["Variant"] = "ESP32";
 	  adv["Mode"] = "remote";
 	  adv["Version"] = versionString;
+
+	  // Version aus versionString extrahieren (z.B. 16.0-alpha)
+	  uint16_t major = 0;
+	  uint16_t minor = 0;
+
+	  String ver = versionString;
+	  int dashPos = ver.indexOf('-');
+	  if (dashPos > 0) {
+		ver = ver.substring(0, dashPos);
+	  }
+
+	  int dotPos = ver.indexOf('.');
+	  if (dotPos > 0) {
+		major = ver.substring(0, dotPos).toInt();
+		minor = ver.substring(dotPos + 1).toInt();
+	  } else {
+		major = ver.toInt();
+		minor = 0;
+	  }
 
 	  adv["majorVersion"] = major;
 	  adv["minorVersion"] = minor;
@@ -275,6 +297,9 @@ private:
 	  JsonObject sys = systems.createNestedObject();
 
 	  String devName = getDeviceName();
+
+	  String id = "WLED-" + WiFi.macAddress();
+      id.replace(":", "");
 
 	  sys["hostname"] = devName;
 	  sys["id"] = id;
@@ -317,10 +342,29 @@ void sendPingPacket(IPAddress destination = IPAddress(255, 255, 255, 255)) {
 
   buf[9] = 0xC3;  // Hardware Type = ESPixelStick ESP32
 
-  buf[10] = (major >> 8) & 0xFF;
-  buf[11] = major & 0xFF;
-  buf[12] = (minor >> 8) & 0xFF;
-  buf[13] = minor & 0xFF;
+  // --------------------------------------------------
+  // Version (MSB first!)
+  // --------------------------------------------------
+  uint16_t versionMajor = 0;
+  uint16_t versionMinor = 0;
+
+  String ver = versionString;
+
+  int dashPos = ver.indexOf('-');
+  if (dashPos > 0) {
+    ver = ver.substring(0, dashPos);
+  }
+
+  int dotPos = ver.indexOf('.');
+  if (dotPos > 0) {
+	versionMajor = ver.substring(0, dotPos).toInt();
+	versionMinor = ver.substring(dotPos + 1).toInt();
+  }
+
+  buf[10] = (versionMajor >> 8) & 0xFF;
+  buf[11] = versionMajor & 0xFF;
+  buf[12] = (versionMinor >> 8) & 0xFF;
+  buf[13] = versionMinor & 0xFF;
 
   // --------------------------------------------------
   // Operating Mode Flags
@@ -340,12 +384,15 @@ void sendPingPacket(IPAddress destination = IPAddress(255, 255, 255, 255)) {
   // --------------------------------------------------
   // Hostname (19-83) 64 bytes + NULL
   // --------------------------------------------------
-  String hostName = devName;
-  if (hostName.length() > 64)
-    hostName = hostName.substring(0, 64);
+
+  String id = "WLED-" + WiFi.macAddress();
+  id.replace(":", "");
+
+  if (id.length() > 64)
+    id = id.substring(0, 64);
 
   for (int i = 0; i < 64; i++) {
-    buf[19 + i] = (i < hostName.length()) ? hostName[i] : 0;
+    buf[19 + i] = (i < id.length()) ? id[i] : 0;
   }
 
   // --------------------------------------------------
