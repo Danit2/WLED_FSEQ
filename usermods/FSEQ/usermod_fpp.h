@@ -142,7 +142,7 @@ private:
     else { major = ver.toInt(); }
     doc["majorVersion"] = major;
     doc["minorVersion"] = minor;
-    doc["typeId"] = 195;
+    doc["typeId"] = 251;
     doc["UUID"] = WiFi.macAddress();
 
     JsonObject utilization = doc.createNestedObject("Utilization");
@@ -158,6 +158,129 @@ private:
     serializeJson(doc, json);
     return json;
   }
+
+	// ======================================================================
+	// Build JSON directly into WLED /json/info root
+	// ======================================================================
+
+	void buildSystemStatusJSON_INFO(JsonObject& root)
+	{
+	  // --------------------------------------------------
+	  // MQTT
+	  // --------------------------------------------------
+	  JsonObject mqtt = root.createNestedObject("MQTT");
+	  mqtt["configured"] = false;
+	  mqtt["connected"] = false;
+
+	  // --------------------------------------------------
+	  // Playlist Info
+	  // --------------------------------------------------
+	  JsonObject currentPlaylist = root.createNestedObject("current_playlist");
+	  currentPlaylist["count"] = "0";
+	  currentPlaylist["description"] = "";
+	  currentPlaylist["index"] = "0";
+	  currentPlaylist["playlist"] = "";
+	  currentPlaylist["type"] = "";
+
+	  // --------------------------------------------------
+	  // Basic Status
+	  // --------------------------------------------------
+	  root["volume"] = 70;
+	  root["media_filename"] = "";
+	  root["fppd"] = "running";
+	  root["current_song"] = "";
+
+	  if (FSEQPlayer::isPlaying()) {
+
+		String fileName = FSEQPlayer::getFileName();
+		float elapsedF = FSEQPlayer::getElapsedSeconds();
+		uint32_t elapsed = (uint32_t)elapsedF;
+
+		root["current_sequence"] = fileName;
+		root["playlist"] = "";
+		root["seconds_elapsed"] = String(elapsed);
+		root["seconds_played"] = String(elapsed);
+		root["seconds_remaining"] = "0";
+		root["sequence_filename"] = fileName;
+
+		uint32_t mins = elapsed / 60;
+		uint32_t secs = elapsed % 60;
+		char timeStr[16];
+		snprintf(timeStr, sizeof(timeStr), "%02u:%02u", mins, secs);
+
+		root["time_elapsed"] = timeStr;
+		root["time_remaining"] = "00:00";
+
+		root["status"] = 1;
+		root["status_name"] = "playing";
+		root["mode"] = 8;
+		root["mode_name"] = "remote";
+
+	  } else {
+
+		root["current_sequence"] = "";
+		root["playlist"] = "";
+		root["seconds_elapsed"] = "0";
+		root["seconds_played"] = "0";
+		root["seconds_remaining"] = "0";
+		root["sequence_filename"] = "";
+		root["time_elapsed"] = "00:00";
+		root["time_remaining"] = "00:00";
+		root["status"] = 0;
+		root["status_name"] = "idle";
+		root["mode"] = 8;
+		root["mode_name"] = "remote";
+	  }
+
+	  // --------------------------------------------------
+	  // Advanced View
+	  // --------------------------------------------------
+	  JsonObject adv = root.createNestedObject("advancedView");
+
+	  String devName = getDeviceName();
+
+	  String id = "WLED-" + WiFi.macAddress();
+	  id.replace(":", "");
+
+	  adv["HostName"] = id;
+	  adv["HostDescription"] = devName;
+	  adv["Platform"] = "WLED";
+	  adv["Variant"] = "ESP32";
+	  adv["Mode"] = "remote";
+	  adv["Version"] = versionString;
+
+	  uint16_t major = 0;
+	  uint16_t minor = 0;
+
+	  String ver = versionString;
+	  int dashPos = ver.indexOf('-');
+	  if (dashPos > 0) {
+		ver = ver.substring(0, dashPos);
+	  }
+
+	  int dotPos = ver.indexOf('.');
+	  if (dotPos > 0) {
+		major = ver.substring(0, dotPos).toInt();
+		minor = ver.substring(dotPos + 1).toInt();
+	  } else {
+		major = ver.toInt();
+		minor = 0;
+	  }
+
+	  adv["majorVersion"] = major;
+	  adv["minorVersion"] = minor;
+	  adv["typeId"] = 251;
+	  adv["UUID"] = WiFi.macAddress();
+
+	  JsonObject util = adv.createNestedObject("Utilization");
+	  util["MemoryFree"] = ESP.getFreeHeap();
+	  util["Uptime"] = millis();
+
+	  adv["rssi"] = WiFi.RSSI();
+
+	  JsonArray ips = adv.createNestedArray("IPS");
+	  ips.add(WiFi.localIP().toString());
+	}
 
 	// Build JSON with system status
 	String buildSystemStatusJSON() {
@@ -268,7 +391,7 @@ private:
 
 	  adv["majorVersion"] = major;
 	  adv["minorVersion"] = minor;
-	  adv["typeId"] = 195;
+	  adv["typeId"] = 251;
 	  adv["UUID"] = WiFi.macAddress();
 
 	  JsonObject util = adv.createNestedObject("Utilization");
@@ -305,7 +428,7 @@ private:
 	  sys["ip"] = WiFi.localIP().toString();
 	  sys["version"] = versionString;
 	  sys["hardwareType"] = "WLED";
-	  sys["type"] = 195;
+	  sys["type"] = 251;
 	  sys["num_chan"] = strip.getLength() * 3;
 	  sys["NumPixelPort"] = 1;
 	  sys["NumSerialPort"] = 0;
@@ -339,7 +462,7 @@ void sendPingPacket(IPAddress destination = IPAddress(255, 255, 255, 255)) {
   buf[7] = 0x03;  // Ping packet version = 3
   buf[8] = 0x00;  // SubType = Ping
 
-  buf[9] = 0xC3;  // Hardware Type = ESPixelStick
+  buf[9] = 0xFB;  // Hardware Type = WLED
 
   // --------------------------------------------------
   // Version (MSB first!)
@@ -551,6 +674,11 @@ void sendPingPacket(IPAddress destination = IPAddress(255, 255, 255, 255)) {
       DEBUG_PRINTLN(F("[FPP] ProcessSyncPacket: Unknown sync action"));
       break;
     }
+  }
+
+  void addToJsonInfo(JsonObject& root) override
+  {
+    buildSystemStatusJSON_INFO(root);
   }
 
 public:
