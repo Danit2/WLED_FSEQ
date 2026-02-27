@@ -1,28 +1,42 @@
 Import("env")
 
-# Reference to the current build environment
 projenv = env
 
-# Read the custom_usermods option from platformio.ini (WLED 0.16 structure)
+# Read custom_usermods from platformio.ini
 custom_usermods = projenv.GetProjectOption("custom_usermods", default="")
 
-# Convert the string into a clean uppercase list
-# Supports comma or space separated entries
+# Normalize list (comma or space separated)
 usermod_list = [
     u.strip().upper()
     for u in custom_usermods.replace(",", " ").split()
+    if u.strip()
 ]
 
-# Check if FSEQ or wildcard "*" is selected
-fseq_enabled = (
-    "FSEQ" in usermod_list or
-    "*" in usermod_list
-)
+# Flags
+fseq_enabled = "FSEQ" in usermod_list or "*" in usermod_list
+sdcard_present = "SD_CARD" in usermod_list or "*" in usermod_list
 
-# Get current CPPDEFINES (build flags)
+# ------------------------------------------------------------------
+# Auto-add SD_CARD if FSEQ is enabled
+# ------------------------------------------------------------------
+if fseq_enabled and not sdcard_present:
+    print("FSEQ detected -> auto-adding SD_CARD usermod")
+
+    # Append SD_CARD to list
+    usermod_list.append("SD_CARD")
+
+    # Rebuild string (space separated)
+    new_value = " ".join(usermod_list)
+
+    # Override project option
+    projenv.Replace(custom_usermods=new_value)
+
+# ------------------------------------------------------------------
+# Ensure SD driver is enabled (SPI default fallback)
+# ------------------------------------------------------------------
+
 cpp_defines = projenv.get("CPPDEFINES", [])
 
-# Extract define names into a simple list
 define_names = []
 for d in cpp_defines:
     if isinstance(d, tuple):
@@ -30,14 +44,9 @@ for d in cpp_defines:
     else:
         define_names.append(d)
 
-# Check if MMC or SPI is already enabled
 mmc_enabled = "WLED_USE_SD_MMC" in define_names
 spi_enabled = "WLED_USE_SD_SPI" in define_names
 
-# Logic:
-# If FSEQ usermod is selected
-# AND neither MMC nor SPI is already defined
-# then automatically enable SPI
 if fseq_enabled and not mmc_enabled and not spi_enabled:
-    print("FSEQ usermod detected -> enabling WLED_USE_SD_SPI")
+    print("FSEQ detected -> enabling WLED_USE_SD_SPI")
     projenv.Append(CPPDEFINES=["WLED_USE_SD_SPI"])
