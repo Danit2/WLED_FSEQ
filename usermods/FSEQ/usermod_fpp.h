@@ -725,13 +725,13 @@ public:
       }
     }
 	
-    if (udpStarted && WiFi.status() == WL_CONNECTED) {
+    // if (udpStarted && WiFi.status() == WL_CONNECTED) {
 
-      if (millis() - lastPingTime > pingInterval) {
-          sendPingPacket();
-          lastPingTime = millis();
-      }
-    }
+      // if (millis() - lastPingTime > pingInterval) {
+          // sendPingPacket();
+          // lastPingTime = millis();
+      // }
+    // }
   }
 
   uint16_t getId() override { return USERMOD_ID_FPP; }
