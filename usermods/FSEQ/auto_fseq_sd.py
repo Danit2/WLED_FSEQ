@@ -14,7 +14,7 @@ usermod_list = [
 
 # Flags
 fseq_enabled = "FSEQ" in usermod_list or "*" in usermod_list
-sdcard_present = "SD_CARD" in usermod_list or "*" in usermod_list
+sdcard_present = "sd_card" in usermod_list or "*" in usermod_list
 
 # ------------------------------------------------------------------
 # Auto-add SD_CARD if FSEQ is enabled
@@ -23,7 +23,7 @@ if fseq_enabled and not sdcard_present:
     print("FSEQ detected -> auto-adding SD_CARD usermod")
 
     # Append SD_CARD to list
-    usermod_list.append("SD_CARD")
+    usermod_list.append("sd_card")
 
     # Rebuild string (space separated)
     new_value = " ".join(usermod_list)
