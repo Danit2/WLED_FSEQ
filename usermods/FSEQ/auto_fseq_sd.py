@@ -2,39 +2,45 @@ Import("env")
 
 projenv = env
 
-# Read custom_usermods from platformio.ini
+# -------------------------------------------------
+# Read custom_usermods exactly as defined
+# -------------------------------------------------
 custom_usermods = projenv.GetProjectOption("custom_usermods", default="")
 
-# Normalize list (comma or space separated)
+# Split but DO NOT change case
 usermod_list = [
-    u.strip().upper()
+    u.strip()
     for u in custom_usermods.replace(",", " ").split()
     if u.strip()
 ]
 
-# Flags
+print("Original custom_usermods:", usermod_list)
+
+# -------------------------------------------------
+# Detect flags (case sensitive!)
+# -------------------------------------------------
 fseq_enabled = "FSEQ" in usermod_list or "*" in usermod_list
 sdcard_present = "sd_card" in usermod_list or "*" in usermod_list
 
-# ------------------------------------------------------------------
-# Auto-add SD_CARD if FSEQ is enabled
-# ------------------------------------------------------------------
+# -------------------------------------------------
+# Auto-add sd_card if FSEQ is enabled
+# -------------------------------------------------
 if fseq_enabled and not sdcard_present:
-    print("FSEQ detected -> auto-adding SD_CARD usermod")
+    print("FSEQ detected -> auto-adding sd_card usermod")
 
-    # Append SD_CARD to list
     usermod_list.append("sd_card")
 
-    # Rebuild string (space separated)
+    # rebuild string (space separated)
     new_value = " ".join(usermod_list)
 
-    # Override project option
-    projenv.Replace(custom_usermods=new_value)
+    print("New custom_usermods:", new_value)
 
-# ------------------------------------------------------------------
-# Ensure SD driver is enabled (SPI default fallback)
-# ------------------------------------------------------------------
+    # Override PROJECT_OPTIONS (only works with pre:)
+    env["PROJECT_OPTIONS"]["custom_usermods"] = new_value
 
+# -------------------------------------------------
+# Ensure SD driver is enabled (SPI fallback)
+# -------------------------------------------------
 cpp_defines = projenv.get("CPPDEFINES", [])
 
 define_names = []
