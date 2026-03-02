@@ -1,6 +1,6 @@
 {
   "name": "FSEQ",
   "build": {
-    "libArchive": false,
+    "libArchive": false
   }
 }
