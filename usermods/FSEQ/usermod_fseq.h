@@ -6,10 +6,6 @@
   #error "FSEQ requires WLED_USE_SD_SPI or WLED_USE_SD_MMC."
 #endif
 
-#if !defined(SD_ADAPTER)
-  #error "FSEQ requires the sd_card usermod."
-#endif
-
 #ifdef WLED_USE_SD_SPI
 #include <SD.h>
 #include <SPI.h>
