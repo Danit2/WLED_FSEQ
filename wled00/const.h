@@ -193,6 +193,7 @@ static_assert(WLED_MAX_BUSSES <= 32, "WLED_MAX_BUSSES exceeds hard limit");
 #define USERMOD_ID_PING_PONG_CLOCK       34     //Usermod "usermod_v2_ping_pong_clock.h"
 #define USERMOD_ID_ADS1115               35     //Usermod "usermod_ads1115.h"
 #define USERMOD_ID_BOBLIGHT              36     //Usermod "boblight.h"
+#define USERMOD_ID_SD_CARD               37     //Usermod "usermod_sd_card.h"
 #define USERMOD_ID_PWM_OUTPUTS           38     //Usermod "usermod_pwm_outputs.h
 #define USERMOD_ID_SHT                   39     //Usermod "usermod_sht.h
 #define USERMOD_ID_KLIPPER               40     //Usermod Klipper percentage
@@ -216,7 +217,6 @@ static_assert(WLED_MAX_BUSSES <= 32, "WLED_MAX_BUSSES exceeds hard limit");
 #define USERMOD_ID_USER_FX               58     //Usermod "user_fx"
 #define USERMOD_ID_FSEQ                  59     //Usermod "usermode_fseq"
 #define USERMOD_ID_FPP                   60     //Usermod "usermode_fpp"
-#define USERMOD_ID_SD_CARD               61     //Usermod "usermod_sd_card.h"
 
 //Wifi encryption type
 #ifdef WLED_ENABLE_WPA_ENTERPRISE
