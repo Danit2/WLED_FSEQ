@@ -2,9 +2,12 @@
 
 #include "wled.h"
 
-#if !defined(USERMOD_SD_CARD) || \
-   (!defined(WLED_USE_SD_SPI) && !defined(WLED_USE_SD_MMC))
-  #error "FSEQ requires sd_card usermod and an SD driver (SPI or MMC)."
+#if !defined(WLED_USE_SD_SPI) && !defined(WLED_USE_SD_MMC)
+  #error "FSEQ requires WLED_USE_SD_SPI or WLED_USE_SD_MMC."
+#endif
+
+#if !defined(SD_ADAPTER)
+  #error "FSEQ requires the sd_card usermod."
 #endif
 
 #ifdef WLED_USE_SD_SPI
