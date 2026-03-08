@@ -273,7 +273,7 @@ private:
 	  adv["minorVersion"] = minor;
 	  adv["typeId"] = 195;
 	  adv["UUID"] = WiFi.macAddress();
-	  adv["zip"] = true
+	  adv["zip"] = true;
 
 	  JsonObject util = adv.createNestedObject("Utilization");
 	  util["MemoryFree"] = ESP.getFreeHeap();
@@ -597,14 +597,27 @@ static int32_t zipSeek(void* handle, int32_t position, int mode)
 			return false;
 		}
 
-		ZIPFILE fileInfo;
 		uint8_t buffer[8192];
 
-		while (zip.gotoNextFile() == UNZ_OK) {
+		unz_file_info fileInfo;
+		char filename[256];
 
-			zip.getFileInfo(&fileInfo);
+		while (zip.gotoNextFile() == UNZ_OK)
+		{
+			if (zip.getFileInfo(
+					&fileInfo,
+					filename,
+					sizeof(filename),
+					NULL,
+					0,
+					NULL,
+					0) != UNZ_OK)
+			{
+				DEBUG_PRINTLN("[ZIP] Failed to read file info");
+				continue;
+			}
 
-			String name = String(fileInfo.szFilename);
+			String name = String(filename);
 
 			DEBUG_PRINTF("[ZIP] Found: %s (%lu bytes)\n",
 						 name.c_str(),
@@ -649,13 +662,18 @@ static int32_t zipSeek(void* handle, int32_t position, int mode)
 				continue;
 			}
 
-			zip.openCurrentFile();
+			if (zip.openCurrentFile() != UNZ_OK) {
+				DEBUG_PRINTLN("[ZIP] Failed to open file in ZIP");
+				outFile.close();
+				continue;
+			}
 
 			int len;
 
-			while ((len = zip.readCurrentFile(buffer, sizeof(buffer))) > 0) {
+			while ((len = zip.readCurrentFile(buffer, sizeof(buffer))) > 0)
+			{
 				outFile.write(buffer, len);
-				yield(); // watchdog safe
+				yield();  // watchdog safety
 			}
 
 			zip.closeCurrentFile();
