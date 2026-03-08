@@ -542,118 +542,128 @@ void sendPingPacket(IPAddress destination = IPAddress(255, 255, 255, 255)) {
     }
   }
 
+static void* zipOpen(const char* filename, int32_t* size)
+{
+    File* f = new File(SD_ADAPTER.open(filename, FILE_READ));
+
+    if (!(*f)) {
+        delete f;
+        return nullptr;
+    }
+
+    *size = f->size();
+    return f;
+}
+
+static void zipClose(void* handle)
+{
+    File* f = (File*)handle;
+    f->close();
+    delete f;
+}
+
+static int32_t zipRead(void* handle, uint8_t* buffer, int32_t length)
+{
+    File* f = (File*)handle;
+    return f->read(buffer, length);
+}
+
+static int32_t zipSeek(void* handle, int32_t position, int mode)
+{
+    File* f = (File*)handle;
+
+    if (mode == SEEK_SET) return f->seek(position);
+    if (mode == SEEK_CUR) return f->seek(f->position() + position);
+    if (mode == SEEK_END) return f->seek(f->size() + position);
+
+    return 0;
+}
+
 	bool unzipFseqFromSD(const String& zipPath)
 	{
 		DEBUG_PRINTF("[ZIP] Opening ZIP: %s\n", zipPath.c_str());
 
-		File zipFile = SD_ADAPTER.open(zipPath.c_str(), FILE_READ);
-		if (!zipFile) {
-			DEBUG_PRINTLN("[ZIP] ERROR: Cannot open ZIP");
-			return false;
-		}
+		int rc = zip.openZIP(
+			zipPath.c_str(),
+			zipOpen,
+			zipClose,
+			zipRead,
+			zipSeek
+		);
 
-		int rc = zip.openZIP(zipFile);
 		if (rc != UNZ_OK) {
-			DEBUG_PRINTF("[ZIP] ERROR: openZIP failed (%d)\n", rc);
-			zipFile.close();
+			DEBUG_PRINTF("[ZIP] openZIP failed: %d\n", rc);
 			return false;
 		}
 
-		ZIPFILE zfile;
-		uint8_t buffer[8192]; // larger buffer → faster extraction
+		ZIPFILE fileInfo;
 
-		while (zip.getNextFile(&zfile) == UNZ_OK) {
+		uint8_t buffer[8192];
 
-			String name = String(zfile.filename);
+		while (zip.gotoNextFile(&fileInfo) == UNZ_OK) {
+
+			String name = String(fileInfo.szName);
 
 			DEBUG_PRINTF("[ZIP] Found: %s (%lu bytes)\n",
 						 name.c_str(),
-						 (unsigned long)zfile.uncompressed_size);
+						 (unsigned long)fileInfo.uncompressed_size);
 
-			// -------------------------------------------------
-			// SECURITY CHECKS
-			// -------------------------------------------------
+			// ---- SECURITY ----
 
-			// forbid directories
 			if (name.endsWith("/")) {
-				DEBUG_PRINTLN("[ZIP] Skipping directory");
-				zip.skipFile();
+				DEBUG_PRINTLN("[ZIP] Skip directory");
 				continue;
 			}
 
-			// forbid path traversal
 			if (name.indexOf("..") >= 0) {
-				DEBUG_PRINTLN("[ZIP] Skipping invalid path");
-				zip.skipFile();
+				DEBUG_PRINTLN("[ZIP] Skip invalid path");
 				continue;
 			}
 
-			// forbid subfolders
 			if (name.indexOf('/') >= 0 || name.indexOf('\\') >= 0) {
-				DEBUG_PRINTLN("[ZIP] Skipping subfolder entry");
-				zip.skipFile();
+				DEBUG_PRINTLN("[ZIP] Skip subfolder");
 				continue;
 			}
 
-			// allow only FSEQ files
 			if (!name.endsWith(".fseq")) {
-				DEBUG_PRINTLN("[ZIP] Skipping non-fseq file");
-				zip.skipFile();
+				DEBUG_PRINTLN("[ZIP] Skip non-fseq");
 				continue;
 			}
-
-			// -------------------------------------------------
-			// WRITE FILE
-			// -------------------------------------------------
 
 			String outPath = "/" + name;
 
-			DEBUG_PRINTF("[ZIP] Extracting -> %s\n", outPath.c_str());
-
 			if (SD_ADAPTER.exists(outPath.c_str())) {
-				DEBUG_PRINTLN("[ZIP] Removing existing file");
 				SD_ADAPTER.remove(outPath.c_str());
 			}
 
 			File outFile = SD_ADAPTER.open(outPath.c_str(), FILE_WRITE);
 
 			if (!outFile) {
-				DEBUG_PRINTLN("[ZIP] ERROR: Cannot create output file");
-				zip.skipFile();
+				DEBUG_PRINTLN("[ZIP] Cannot create output file");
 				continue;
 			}
 
-			int bytesRead;
-			size_t totalWritten = 0;
+			zip.openCurrentFile();
 
-			while ((bytesRead = zip.readFile(buffer, sizeof(buffer))) > 0) {
-				outFile.write(buffer, bytesRead);
-				totalWritten += bytesRead;
+			int len;
+
+			while ((len = zip.readCurrentFile(buffer, sizeof(buffer))) > 0) {
+				outFile.write(buffer, len);
+				yield(); // watchdog safety
 			}
+
+			zip.closeCurrentFile();
 
 			outFile.close();
 
-			DEBUG_PRINTF("[ZIP] Extracted %s (%u bytes)\n",
-						 outPath.c_str(),
-						 (unsigned int)totalWritten);
-
-			// CRC check
-			if (!zip.checkCRC()) {
-				DEBUG_PRINTLN("[ZIP] WARNING: CRC mismatch!");
-			} else {
-				DEBUG_PRINTLN("[ZIP] CRC OK");
-			}
+			DEBUG_PRINTF("[ZIP] Extracted %s\n", outPath.c_str());
 		}
 
 		zip.closeZIP();
-		zipFile.close();
 
-		DEBUG_PRINTLN("[ZIP] Extraction finished");
-
-		// remove zip file
 		SD_ADAPTER.remove(zipPath.c_str());
 
-		DEBUG_PRINTLN("[ZIP] ZIP removed");
+		DEBUG_PRINTLN("[ZIP] Extraction finished");
 
 		return true;
 	}
@@ -752,8 +762,6 @@ public:
 
 		if (index + len == total) {
 
-			DEBUG_PRINTLN("[FPP] Upload finished");
-
 			if (uploadStream) {
 				uploadStream->flush();
 				delete uploadStream;
@@ -764,9 +772,7 @@ public:
 				currentUploadFile.close();
 			}
 
-			bool isZip = currentUploadFileName.endsWith(".zip");
-
-			if (isZip) {
+			if (currentUploadFileName.endsWith(".zip")) {
 
 				DEBUG_PRINTLN("[FPP] ZIP detected -> extracting");
 
@@ -776,15 +782,7 @@ public:
 					request->send(500, "text/plain", "ZIP extraction failed");
 					return;
 				}
-
-				DEBUG_PRINTLN("[FPP] ZIP extracted successfully");
 			}
-
-			unsigned long duration = millis() - uploadStartTime;
-
-			DEBUG_PRINTF("[FPP] Upload complete in %lu ms\n", duration);
-
-			currentUploadFileName = "";
 
 			request->send(200, "text/plain", "Upload complete");
 		}
