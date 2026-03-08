@@ -3,5 +3,8 @@
   "build": {
     "libArchive": false,
     "extraScript": "auto_fseq_sd.py"
+  },
+  "dependencies": {
+    "bitbank2/unzipLIB":"1.0.0"
   }
 }

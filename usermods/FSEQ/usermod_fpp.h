@@ -13,6 +13,9 @@
 #include <AsyncUDP.h>
 #include <ESPAsyncWebServer.h>
 
+#include <unzipLIB.h>
+UNZIP zip;
+
 // ----- Minimal WriteBufferingStream Implementation -----
 // This class buffers data before writing it to an underlying Stream.
 class WriteBufferingStream : public Stream {
@@ -539,6 +542,122 @@ void sendPingPacket(IPAddress destination = IPAddress(255, 255, 255, 255)) {
     }
   }
 
+	bool unzipFseqFromSD(const String& zipPath)
+	{
+		DEBUG_PRINTF("[ZIP] Opening ZIP: %s\n", zipPath.c_str());
+
+		File zipFile = SD_ADAPTER.open(zipPath.c_str(), FILE_READ);
+		if (!zipFile) {
+			DEBUG_PRINTLN("[ZIP] ERROR: Cannot open ZIP");
+			return false;
+		}
+
+		int rc = zip.openZIP(zipFile);
+		if (rc != UNZ_OK) {
+			DEBUG_PRINTF("[ZIP] ERROR: openZIP failed (%d)\n", rc);
+			zipFile.close();
+			return false;
+		}
+
+		ZIPFILE zfile;
+		uint8_t buffer[8192]; // larger buffer → faster extraction
+
+		while (zip.getNextFile(&zfile) == UNZ_OK) {
+
+			String name = String(zfile.filename);
+
+			DEBUG_PRINTF("[ZIP] Found: %s (%lu bytes)\n",
+						 name.c_str(),
+						 (unsigned long)zfile.uncompressed_size);
+
+			// -------------------------------------------------
+			// SECURITY CHECKS
+			// -------------------------------------------------
+
+			// forbid directories
+			if (name.endsWith("/")) {
+				DEBUG_PRINTLN("[ZIP] Skipping directory");
+				zip.skipFile();
+				continue;
+			}
+
+			// forbid path traversal
+			if (name.indexOf("..") >= 0) {
+				DEBUG_PRINTLN("[ZIP] Skipping invalid path");
+				zip.skipFile();
+				continue;
+			}
+
+			// forbid subfolders
+			if (name.indexOf('/') >= 0 || name.indexOf('\\') >= 0) {
+				DEBUG_PRINTLN("[ZIP] Skipping subfolder entry");
+				zip.skipFile();
+				continue;
+			}
+
+			// allow only FSEQ files
+			if (!name.endsWith(".fseq")) {
+				DEBUG_PRINTLN("[ZIP] Skipping non-fseq file");
+				zip.skipFile();
+				continue;
+			}
+
+			// -------------------------------------------------
+			// WRITE FILE
+			// -------------------------------------------------
+
+			String outPath = "/" + name;
+
+			DEBUG_PRINTF("[ZIP] Extracting -> %s\n", outPath.c_str());
+
+			if (SD_ADAPTER.exists(outPath.c_str())) {
+				DEBUG_PRINTLN("[ZIP] Removing existing file");
+				SD_ADAPTER.remove(outPath.c_str());
+			}
+
+			File outFile = SD_ADAPTER.open(outPath.c_str(), FILE_WRITE);
+
+			if (!outFile) {
+				DEBUG_PRINTLN("[ZIP] ERROR: Cannot create output file");
+				zip.skipFile();
+				continue;
+			}
+
+			int bytesRead;
+			size_t totalWritten = 0;
+
+			while ((bytesRead = zip.readFile(buffer, sizeof(buffer))) > 0) {
+				outFile.write(buffer, bytesRead);
+				totalWritten += bytesRead;
+			}
+
+			outFile.close();
+
+			DEBUG_PRINTF("[ZIP] Extracted %s (%u bytes)\n",
+						 outPath.c_str(),
+						 (unsigned int)totalWritten);
+
+			// CRC check
+			if (!zip.checkCRC()) {
+				DEBUG_PRINTLN("[ZIP] WARNING: CRC mismatch!");
+			} else {
+				DEBUG_PRINTLN("[ZIP] CRC OK");
+			}
+		}
+
+		zip.closeZIP();
+		zipFile.close();
+
+		DEBUG_PRINTLN("[ZIP] Extraction finished");
+
+		// remove zip file
+		SD_ADAPTER.remove(zipPath.c_str());
+
+		DEBUG_PRINTLN("[ZIP] ZIP removed");
+
+		return true;
+	}
+
 public:
   static const char _name[];
 
@@ -631,27 +750,44 @@ public:
             uploadStream->write(data, len);
         }
 
-        if (index + len == total) {
+		if (index + len == total) {
 
-            DEBUG_PRINTLN("[FPP] Upload finished");
+			DEBUG_PRINTLN("[FPP] Upload finished");
 
-            if (uploadStream) {
-                uploadStream->flush();
-                delete uploadStream;
-                uploadStream = nullptr;
-            }
+			if (uploadStream) {
+				uploadStream->flush();
+				delete uploadStream;
+				uploadStream = nullptr;
+			}
 
-            if (currentUploadFile) {
-                currentUploadFile.close();
-            }
+			if (currentUploadFile) {
+				currentUploadFile.close();
+			}
 
-            unsigned long duration = millis() - uploadStartTime;
-            DEBUG_PRINTF("[FPP] Upload complete in %lu ms\n", duration);
+			bool isZip = currentUploadFileName.endsWith(".zip");
 
-            currentUploadFileName = "";
+			if (isZip) {
 
-            request->send(200, "text/plain", "Upload complete");
-        }
+				DEBUG_PRINTLN("[FPP] ZIP detected -> extracting");
+
+				bool ok = unzipFseqFromSD(currentUploadFileName);
+
+				if (!ok) {
+					request->send(500, "text/plain", "ZIP extraction failed");
+					return;
+				}
+
+				DEBUG_PRINTLN("[FPP] ZIP extracted successfully");
+			}
+
+			unsigned long duration = millis() - uploadStartTime;
+
+			DEBUG_PRINTF("[FPP] Upload complete in %lu ms\n", duration);
+
+			currentUploadFileName = "";
+
+			request->send(200, "text/plain", "Upload complete");
+		}
     });
 
 
@@ -724,14 +860,6 @@ public:
         DEBUG_PRINTLN(F("[FPP] UDP listener started on multicast"));
       }
     }
-	
-    // if (udpStarted && WiFi.status() == WL_CONNECTED) {
-
-      // if (millis() - lastPingTime > pingInterval) {
-          // sendPingPacket();
-          // lastPingTime = millis();
-      // }
-    // }
   }
 
   uint16_t getId() override { return USERMOD_ID_FPP; }
