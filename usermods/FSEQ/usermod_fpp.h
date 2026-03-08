@@ -273,6 +273,7 @@ private:
 	  adv["minorVersion"] = minor;
 	  adv["typeId"] = 195;
 	  adv["UUID"] = WiFi.macAddress();
+	  adv["zip"] = true
 
 	  JsonObject util = adv.createNestedObject("Utilization");
 	  util["MemoryFree"] = ESP.getFreeHeap();
@@ -597,18 +598,19 @@ static int32_t zipSeek(void* handle, int32_t position, int mode)
 		}
 
 		ZIPFILE fileInfo;
-
 		uint8_t buffer[8192];
 
-		while (zip.gotoNextFile(&fileInfo) == UNZ_OK) {
+		while (zip.gotoNextFile() == UNZ_OK) {
 
-			String name = String(fileInfo.szName);
+			zip.getFileInfo(&fileInfo);
+
+			String name = String(fileInfo.szFilename);
 
 			DEBUG_PRINTF("[ZIP] Found: %s (%lu bytes)\n",
 						 name.c_str(),
 						 (unsigned long)fileInfo.uncompressed_size);
 
-			// ---- SECURITY ----
+			// ---------------- SECURITY ----------------
 
 			if (name.endsWith("/")) {
 				DEBUG_PRINTLN("[ZIP] Skip directory");
@@ -630,7 +632,11 @@ static int32_t zipSeek(void* handle, int32_t position, int mode)
 				continue;
 			}
 
+			// ---------------- WRITE FILE ----------------
+
 			String outPath = "/" + name;
+
+			DEBUG_PRINTF("[ZIP] Extracting -> %s\n", outPath.c_str());
 
 			if (SD_ADAPTER.exists(outPath.c_str())) {
 				SD_ADAPTER.remove(outPath.c_str());
@@ -649,11 +655,10 @@ static int32_t zipSeek(void* handle, int32_t position, int mode)
 
 			while ((len = zip.readCurrentFile(buffer, sizeof(buffer))) > 0) {
 				outFile.write(buffer, len);
-				yield(); // watchdog safety
+				yield(); // watchdog safe
 			}
 
 			zip.closeCurrentFile();
-
 			outFile.close();
 
 			DEBUG_PRINTF("[ZIP] Extracted %s\n", outPath.c_str());
