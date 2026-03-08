@@ -30,14 +30,6 @@ public:
   void setup() {
     DEBUG_PRINTF("[%s] Usermod loaded\n", FPSTR(_name));
 
-    // Initialize SD card using SDManager
-    SDManager sd;
-    if (!sd.begin()) {
-      DEBUG_PRINTF("[%s] SD initialization FAILED.\n", FPSTR(_name));
-    } else {
-      DEBUG_PRINTF("[%s] SD initialization successful.\n", FPSTR(_name));
-    }
-
     // Register web endpoints defined in WebUIManager
     webUI.registerEndpoints();
   }
