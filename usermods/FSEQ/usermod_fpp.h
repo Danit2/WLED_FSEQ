@@ -626,6 +626,16 @@ bool unzipFseqFromSD(const String& zipPath)
         }
 
         String name = String(filename);
+		
+		int slash = name.lastIndexOf('/');
+		if (slash >= 0) {
+			name = name.substring(slash + 1);
+		}
+
+		slash = name.lastIndexOf('\\');
+		if (slash >= 0) {
+			name = name.substring(slash + 1);
+		}
 
         DEBUG_PRINTF("[ZIP] Found: %s\n", name.c_str());
 
@@ -813,14 +823,13 @@ public:
 			}
 
 			if (currentUploadFileName.endsWith(".zip") || currentUploadFileName.endsWith(".xlz"))
-{
+			{
 				DEBUG_PRINTLN("[FPP] ZIP/XLZ upload complete -> extracting");
 
 				bool ok = unzipFseqFromSD(currentUploadFileName);
 
 				if (!ok) {
-					request->send(500, "text/plain", "ZIP extraction failed");
-					return;
+					DEBUG_PRINTLN("[FPP] ZIP extraction failed");
 				}
 			}
 
