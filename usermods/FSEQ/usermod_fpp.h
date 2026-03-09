@@ -735,6 +735,8 @@ void scanForXLZ()
 
 bool xlzChecked = false;
 
+int32_t xlzStartTime = 0;
+
 public:
   static const char _name[];
 
