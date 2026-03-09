@@ -14,13 +14,14 @@
 #include <ESPAsyncWebServer.h>
 
 #include <unzipLIB.h>
-UNZIP zip;
 
-#ifndef XLZ_BUFFER_SIZE
-  #define XLZ_BUFFER_SIZE 2048
+#ifndef XLZ_IO_BUFFER_SIZE
+  #define XLZ_IO_BUFFER_SIZE 1024
 #endif
 
-static uint8_t xlzBuffer[XLZ_BUFFER_SIZE];
+#ifndef XLZ_MAX_ARCHIVES
+  #define XLZ_MAX_ARCHIVES 16
+#endif
 
 // ----- Minimal WriteBufferingStream Implementation -----
 // This class buffers data before writing it to an underlying Stream.
@@ -116,6 +117,9 @@ private:
   const IPAddress multicastAddr =
       IPAddress(239, 70, 80, 80);         // Multicast address
   const uint16_t udpPort = UDP_SYNC_PORT; // UDP port
+  
+  UNZIP xlzZip;
+  uint8_t xlzIoBuffer[XLZ_IO_BUFFER_SIZE];
 
   // Variables for FSEQ file upload
   File currentUploadFile;
@@ -554,8 +558,10 @@ static void* zipOpen(const char* filename, int32_t* size)
   if (!filename || !size) return nullptr;
 
   File* f = new File(SD_ADAPTER.open(filename, FILE_READ));
-  if (!f || !(*f)) {
-    if (f) delete f;
+  if (!f) return nullptr;
+
+  if (!(*f)) {
+    delete f;
     return nullptr;
   }
 
@@ -576,43 +582,46 @@ static int32_t zipRead(void* handle, uint8_t* buffer, int32_t length)
 {
   File* f = static_cast<File*>(handle);
   if (!f || !buffer || length <= 0) return -1;
+  if (!(*f)) return -1;
 
-  int32_t readLen = (int32_t)f->read(buffer, (size_t)length);
-  return (readLen < 0) ? -1 : readLen;
+  int32_t r = (int32_t)f->read(buffer, (size_t)length);
+  return (r < 0) ? -1 : r;
 }
 
 static int32_t zipSeek(void* handle, int32_t position, int mode)
 {
   File* f = static_cast<File*>(handle);
   if (!f) return -1;
+  if (!(*f)) return -1;
 
   int32_t newPos = 0;
+  int32_t curPos = (int32_t)f->position();
+  int32_t fileSize = (int32_t)f->size();
 
   switch (mode) {
     case SEEK_SET:
       newPos = position;
       break;
-
     case SEEK_CUR:
-      newPos = (int32_t)f->position() + position;
+      newPos = curPos + position;
       break;
-
     case SEEK_END:
-      newPos = (int32_t)f->size() + position;
+      newPos = fileSize + position;
       break;
-
     default:
       return -1;
   }
 
   if (newPos < 0) newPos = 0;
-  if (newPos > (int32_t)f->size()) newPos = (int32_t)f->size();
+  if (newPos > fileSize) newPos = fileSize;
 
   return f->seek((uint32_t)newPos) ? 0 : -1;
 }
 
-
-static String getBaseNameFromZipPath(const char* fullName)
+// ----------------------------------------------------
+// Hilfsfunktion: nur Dateiname ohne Pfad
+// ----------------------------------------------------
+static String xlzBaseName(const char* fullName)
 {
   if (!fullName) return String();
 
@@ -626,131 +635,174 @@ static String getBaseNameFromZipPath(const char* fullName)
   return name;
 }
 
-
-bool extractXLZ(const String& inputPath)
+bool extractXLZFile(const String& archivePathIn)
 {
-  if (inputPath.isEmpty()) {
-    DEBUG_PRINTLN(F("[XLZ] Empty input path"));
+  if (archivePathIn.isEmpty()) {
+    DEBUG_PRINTLN(F("[XLZ] Empty archive path"));
     return false;
   }
 
-  String zipPath = inputPath;
-  if (!zipPath.startsWith("/")) zipPath = "/" + zipPath;
+  String archivePath = archivePathIn;
+  if (!archivePath.startsWith("/")) archivePath = "/" + archivePath;
 
-  if (!SD_ADAPTER.exists(zipPath.c_str())) {
-    DEBUG_PRINTF("[XLZ] File not found: %s\n", zipPath.c_str());
+  if (!SD_ADAPTER.exists(archivePath.c_str())) {
+    DEBUG_PRINTF("[XLZ] Archive not found: %s\n", archivePath.c_str());
     return false;
   }
 
-  DEBUG_PRINTF("[XLZ] Opening archive: %s\n", zipPath.c_str());
+  DEBUG_PRINTF("[XLZ] Opening archive: %s\n", archivePath.c_str());
 
-  int32_t zipSize = 0;
-  int rc = zip.openZIP(zipPath.c_str(), zipOpen, zipClose, zipRead, zipSeek);
+  int rc = xlzZip.openZIP(archivePath.c_str(), zipOpen, zipClose, zipRead, zipSeek);
   if (rc != UNZ_OK) {
     DEBUG_PRINTF("[XLZ] openZIP failed: %d\n", rc);
     return false;
   }
 
-  rc = zip.gotoFirstFile();
+  bool zipOpened = true;
+  bool extractedAny = false;
+
+  rc = xlzZip.gotoFirstFile();
   if (rc != UNZ_OK) {
     DEBUG_PRINTF("[XLZ] gotoFirstFile failed: %d\n", rc);
-    zip.closeZIP();
+    xlzZip.closeZIP();
     return false;
   }
 
-  bool extractedAny = false;
-
   while (true) {
-    unz_file_info fileInfo;
-    char archivedName[256] = {0};
+    unz_file_info info;
+    memset(&info, 0, sizeof(info));
 
-    int infoRc = zip.getFileInfo(&fileInfo, archivedName, sizeof(archivedName), nullptr, 0, nullptr, 0);
+    char entryName[256];
+    memset(entryName, 0, sizeof(entryName));
+
+    int infoRc = xlzZip.getFileInfo(&info, entryName, sizeof(entryName), nullptr, 0, nullptr, 0);
+    entryName[sizeof(entryName) - 1] = '\0';
+
     if (infoRc != UNZ_OK) {
       DEBUG_PRINTF("[XLZ] getFileInfo failed: %d\n", infoRc);
       break;
     }
 
-    String baseName = getBaseNameFromZipPath(archivedName);
+    DEBUG_PRINTF("[XLZ] Entry raw: %s\n", entryName);
+
+    String rawName = String(entryName);
+    rawName.replace("\\", "/");
+
+    // Directory-Einträge direkt überspringen
+    if (rawName.endsWith("/")) {
+      int nextRc = xlzZip.gotoNextFile();
+      if (nextRc != UNZ_OK) break;
+      yield();
+      continue;
+    }
+
+    String baseName = rawName;
+    int slash = baseName.lastIndexOf('/');
+    if (slash >= 0) baseName = baseName.substring(slash + 1);
+    baseName.trim();
+
+    if (baseName.isEmpty()) {
+      int nextRc = xlzZip.gotoNextFile();
+      if (nextRc != UNZ_OK) break;
+      yield();
+      continue;
+    }
+
     String lowerName = baseName;
     lowerName.toLowerCase();
 
-    DEBUG_PRINTF("[XLZ] Archive entry: %s\n", archivedName);
+    if (!lowerName.endsWith(".fseq")) {
+      int nextRc = xlzZip.gotoNextFile();
+      if (nextRc != UNZ_OK) break;
+      yield();
+      continue;
+    }
 
-    if (baseName.length() > 0 && lowerName.endsWith(".fseq")) {
-      String outPath = "/" + baseName;
+    String outPath = "/" + baseName;
+    DEBUG_PRINTF("[XLZ] Extracting: %s\n", outPath.c_str());
 
-      DEBUG_PRINTF("[XLZ] Extracting to: %s\n", outPath.c_str());
+    if (SD_ADAPTER.exists(outPath.c_str())) {
+      SD_ADAPTER.remove(outPath.c_str());
+    }
 
-      if (SD_ADAPTER.exists(outPath.c_str())) {
-        DEBUG_PRINTF("[XLZ] Removing existing file: %s\n", outPath.c_str());
-        SD_ADAPTER.remove(outPath.c_str());
-      }
+    File outFile = SD_ADAPTER.open(outPath.c_str(), FILE_WRITE);
+    if (!outFile) {
+      DEBUG_PRINTF("[XLZ] Cannot create output file: %s\n", outPath.c_str());
+      int nextRc = xlzZip.gotoNextFile();
+      if (nextRc != UNZ_OK) break;
+      yield();
+      continue;
+    }
 
-      File outFile = SD_ADAPTER.open(outPath.c_str(), FILE_WRITE);
-      if (!outFile) {
-        DEBUG_PRINTF("[XLZ] Failed to create output file: %s\n", outPath.c_str());
-      } else {
-        int openRc = zip.openCurrentFile();
-        if (openRc != UNZ_OK) {
-          DEBUG_PRINTF("[XLZ] openCurrentFile failed: %d\n", openRc);
-          outFile.close();
-        } else {
-          bool entryOk = true;
+    bool entryOk = true;
+    bool openedCurrent = false;
 
-          while (true) {
-            int len = zip.readCurrentFile(xlzBuffer, sizeof(xlzBuffer));
+    int openRc = xlzZip.openCurrentFile();
+    if (openRc != UNZ_OK) {
+      DEBUG_PRINTF("[XLZ] openCurrentFile failed: %d\n", openRc);
+      outFile.close();
+      SD_ADAPTER.remove(outPath.c_str());
 
-            if (len > 0) {
-              size_t written = outFile.write(xlzBuffer, (size_t)len);
-              if (written != (size_t)len) {
-                DEBUG_PRINTF("[XLZ] Write error: wrote %u of %d bytes\n", (unsigned)written, len);
-                entryOk = false;
-                break;
-              }
-            } else if (len == 0) {
-              // EOF
-              break;
-            } else {
-              // ZIP read error
-              DEBUG_PRINTF("[XLZ] readCurrentFile failed: %d\n", len);
-              entryOk = false;
-              break;
-            }
+      int nextRc = xlzZip.gotoNextFile();
+      if (nextRc != UNZ_OK) break;
+      yield();
+      continue;
+    }
 
-            yield();
-          }
+    openedCurrent = true;
 
-          zip.closeCurrentFile();
-          outFile.close();
+    while (true) {
+      int len = xlzZip.readCurrentFile(xlzIoBuffer, sizeof(xlzIoBuffer));
 
-          if (entryOk) {
-            DEBUG_PRINTF("[XLZ] Extract OK: %s\n", outPath.c_str());
-            extractedAny = true;
-          } else {
-            DEBUG_PRINTF("[XLZ] Extract failed, removing incomplete file: %s\n", outPath.c_str());
-            SD_ADAPTER.remove(outPath.c_str());
-          }
+      if (len > 0) {
+        size_t written = outFile.write(xlzIoBuffer, (size_t)len);
+        if (written != (size_t)len) {
+          DEBUG_PRINTF("[XLZ] Write failed: %u/%d bytes\n", (unsigned)written, len);
+          entryOk = false;
+          break;
         }
+      } else if (len == 0) {
+        break; // EOF
+      } else {
+        DEBUG_PRINTF("[XLZ] readCurrentFile failed: %d\n", len);
+        entryOk = false;
+        break;
       }
+
+      yield();
     }
 
-    int nextRc = zip.gotoNextFile();
-    if (nextRc != UNZ_OK) {
-      break;
+    if (openedCurrent) {
+      xlzZip.closeCurrentFile();
     }
+
+    outFile.close();
+
+    if (!entryOk) {
+      DEBUG_PRINTF("[XLZ] Removing incomplete file: %s\n", outPath.c_str());
+      SD_ADAPTER.remove(outPath.c_str());
+    } else {
+      DEBUG_PRINTF("[XLZ] Extract OK: %s\n", outPath.c_str());
+      extractedAny = true;
+    }
+
+    int nextRc = xlzZip.gotoNextFile();
+    if (nextRc != UNZ_OK) break;
 
     yield();
   }
 
-  zip.closeZIP();
+  if (zipOpened) {
+    xlzZip.closeZIP();
+  }
 
   if (extractedAny) {
-    DEBUG_PRINTF("[XLZ] Removing archive: %s\n", zipPath.c_str());
-    if (!SD_ADAPTER.remove(zipPath.c_str())) {
-      DEBUG_PRINTF("[XLZ] Warning: could not remove archive: %s\n", zipPath.c_str());
+    DEBUG_PRINTF("[XLZ] Removing archive: %s\n", archivePath.c_str());
+    if (!SD_ADAPTER.remove(archivePath.c_str())) {
+      DEBUG_PRINTF("[XLZ] Warning: could not remove archive: %s\n", archivePath.c_str());
     }
   } else {
-    DEBUG_PRINTF("[XLZ] No .fseq extracted from: %s\n", zipPath.c_str());
+    DEBUG_PRINTF("[XLZ] Nothing extracted from: %s\n", archivePath.c_str());
   }
 
   return extractedAny;
@@ -772,8 +824,8 @@ void scanForXLZ()
     return;
   }
 
-  String archives[32];
-  uint8_t archiveCount = 0;
+  String archives[XLZ_MAX_ARCHIVES];
+  uint8_t count = 0;
 
   while (true) {
     File file = root.openNextFile();
@@ -787,12 +839,12 @@ void scanForXLZ()
       lower.toLowerCase();
 
       if (lower.endsWith(".xlz") || lower.endsWith(".zip")) {
-        if (archiveCount < 32) {
+        if (count < XLZ_MAX_ARCHIVES) {
           if (!name.startsWith("/")) name = "/" + name;
-          archives[archiveCount++] = name;
+          archives[count++] = name;
           DEBUG_PRINTF("[XLZ] Found archive: %s\n", name.c_str());
         } else {
-          DEBUG_PRINTLN(F("[XLZ] Archive list full, skipping extra files"));
+          DEBUG_PRINTLN(F("[XLZ] Archive list full"));
         }
       }
     } else {
@@ -804,9 +856,9 @@ void scanForXLZ()
 
   root.close();
 
-  for (uint8_t i = 0; i < archiveCount; i++) {
-    DEBUG_PRINTF("[XLZ] Processing %s\n", archives[i].c_str());
-    extractXLZ(archives[i]);
+  for (uint8_t i = 0; i < count; i++) {
+    DEBUG_PRINTF("[XLZ] Processing: %s\n", archives[i].c_str());
+    extractXLZFile(archives[i]);
     yield();
   }
 
