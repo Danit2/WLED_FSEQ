@@ -920,7 +920,7 @@ public:
         DEBUG_PRINTLN(F("[FPP] UDP listener started on multicast"));
       }
     }
-	if (!xlzChecked && SD_ADAPTER.begin()) {
+	if (!xlzChecked) {
         DEBUG_PRINTLN("[XLZ] SD ready -> scanning");
         scanForXLZ();
         xlzChecked = true;
