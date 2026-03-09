@@ -854,6 +854,7 @@ public:
             }
 
             currentUploadFileName = "";
+            request->send(200, "text/plain", "Upload complete");
 			
 			if (unzipNeeded) {
 
@@ -867,7 +868,6 @@ public:
                     DEBUG_PRINTLN("[FPP] ZIP extraction finished");
                 }
             }
-            request->send(200, "text/plain", "Upload complete");
         }
     });
 
