@@ -560,10 +560,10 @@ static void zipClose(void* handle)
 {
     File* f = (File*)handle;
 
-    if (f) {
-        f->close();
-        delete f;
-    }
+    if (!f) return;
+
+    f->close();
+    delete f;
 }
 
 static int32_t zipRead(void* handle, uint8_t* buffer, int32_t length)
@@ -572,7 +572,11 @@ static int32_t zipRead(void* handle, uint8_t* buffer, int32_t length)
 
     if (!f) return -1;
 
-    return f->read(buffer, length);
+    int32_t r = f->read(buffer, length);
+
+    if (r < 0) return -1;
+
+    return r;
 }
 
 static int32_t zipSeek(void* handle, int32_t position, int mode)
@@ -581,24 +585,21 @@ static int32_t zipSeek(void* handle, int32_t position, int mode)
 
     if (!f) return -1;
 
-    size_t newPos;
+    int32_t newPos = 0;
 
-    if (mode == SEEK_SET) {
+    if (mode == SEEK_SET)
         newPos = position;
-    }
-    else if (mode == SEEK_CUR) {
-        newPos = f->position() + position;
-    }
-    else if (mode == SEEK_END) {
-        newPos = f->size() + position;
-    }
-    else {
-        return -1;
-    }
 
-    if (!f->seek(newPos)) {
+    else if (mode == SEEK_CUR)
+        newPos = f->position() + position;
+
+    else if (mode == SEEK_END)
+        newPos = f->size() + position;
+
+    if (newPos < 0) newPos = 0;
+
+    if (!f->seek(newPos))
         return -1;
-    }
 
     return 0;
 }
@@ -610,7 +611,7 @@ bool unzipFseqFromSD(const String& zipPath)
     if (!zipFile.startsWith("/"))
         zipFile = "/" + zipFile;
 
-    DEBUG_PRINTF("[ZIP] Opening ZIP: %s\n", zipFile.c_str());
+    DEBUG_PRINTF("[ZIP] Opening: %s\n", zipFile.c_str());
 
     int rc = zip.openZIP(
         zipFile.c_str(),
@@ -626,14 +627,14 @@ bool unzipFseqFromSD(const String& zipPath)
     }
 
     if (zip.gotoFirstFile() != UNZ_OK) {
-        DEBUG_PRINTLN("[ZIP] No files in ZIP");
+        DEBUG_PRINTLN("[ZIP] archive empty");
         zip.closeZIP();
         return false;
     }
 
-    uint8_t buffer[8192];
+    uint8_t buffer[4096];
 
-    unz_file_info fileInfo;
+    unz_file_info info;
     char filename[256];
 
     bool extracted = false;
@@ -641,25 +642,21 @@ bool unzipFseqFromSD(const String& zipPath)
     while (true)
     {
         if (zip.getFileInfo(
-                &fileInfo,
+                &info,
                 filename,
                 sizeof(filename),
-                NULL,
-                0,
-                NULL,
-                0) != UNZ_OK)
+                NULL,0,
+                NULL,0) != UNZ_OK)
         {
-            DEBUG_PRINTLN("[ZIP] Failed to read file info");
+            DEBUG_PRINTLN("[ZIP] getFileInfo failed");
             break;
         }
 
         String name = String(filename);
 
-        DEBUG_PRINTF("[ZIP] Found: %s (%lu bytes)\n",
-                     name.c_str(),
-                     (unsigned long)fileInfo.uncompressed_size);
+        DEBUG_PRINTF("[ZIP] File: %s\n", name.c_str());
 
-        // --- remove folders from path ---
+        // remove folder paths
         int slash = name.lastIndexOf('/');
         if (slash >= 0) name = name.substring(slash + 1);
 
@@ -671,23 +668,25 @@ bool unzipFseqFromSD(const String& zipPath)
             continue;
         }
 
+        name.toLowerCase();
+
         if (!name.endsWith(".fseq")) {
-            DEBUG_PRINTLN("[ZIP] Skip non-fseq");
+            DEBUG_PRINTLN("[ZIP] skipping non-fseq");
             if (zip.gotoNextFile() != UNZ_OK) break;
             continue;
         }
 
         String outPath = "/" + name;
 
-        DEBUG_PRINTF("[ZIP] Extracting -> %s\n", outPath.c_str());
+        DEBUG_PRINTF("[ZIP] Extract -> %s\n", outPath.c_str());
 
-        if (SD_ADAPTER.exists(outPath.c_str()))
-            SD_ADAPTER.remove(outPath.c_str());
+        if (SD_ADAPTER.exists(outPath))
+            SD_ADAPTER.remove(outPath);
 
-        File outFile = SD_ADAPTER.open(outPath.c_str(), FILE_WRITE);
+        File outFile = SD_ADAPTER.open(outPath, FILE_WRITE);
 
         if (!outFile) {
-            DEBUG_PRINTLN("[ZIP] Cannot create output file");
+            DEBUG_PRINTLN("[ZIP] cannot create output file");
             if (zip.gotoNextFile() != UNZ_OK) break;
             continue;
         }
@@ -701,9 +700,20 @@ bool unzipFseqFromSD(const String& zipPath)
 
         int len;
 
-        while ((len = zip.readCurrentFile(buffer, sizeof(buffer))) > 0)
+        while (true)
         {
+            len = zip.readCurrentFile(buffer, sizeof(buffer));
+
+            if (len < 0) {
+                DEBUG_PRINTLN("[ZIP] read error");
+                break;
+            }
+
+            if (len == 0)
+                break;
+
             outFile.write(buffer, len);
+
             yield();
         }
 
@@ -720,17 +730,14 @@ bool unzipFseqFromSD(const String& zipPath)
 
     zip.closeZIP();
 
-    if (SD_ADAPTER.exists(zipFile.c_str()))
-        SD_ADAPTER.remove(zipFile.c_str());
-
-    if (!extracted) {
-        DEBUG_PRINTLN("[ZIP] No FSEQ found in archive");
-        return false;
+    if (extracted) {
+        DEBUG_PRINTLN("[ZIP] deleting archive");
+        SD_ADAPTER.remove(zipFile);
     }
 
-    DEBUG_PRINTLN("[ZIP] Extraction finished");
+    DEBUG_PRINTLN("[ZIP] done");
 
-    return true;
+    return extracted;
 }
 
 public:
