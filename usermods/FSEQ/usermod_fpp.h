@@ -619,51 +619,56 @@ bool unzipFseqFromSD(const String& zipPath)
             continue;
         }
 
-        String name = String(filename);
+        String internalName = String(filename);
 
         DEBUG_PRINTF("[ZIP] Found: %s (%lu bytes)\n",
-                     name.c_str(),
+                     internalName.c_str(),
                      (unsigned long)fileInfo.uncompressed_size);
 
-        // ---------- SECURITY ----------
+        // ---------------- SECURITY ----------------
 
-        if (name.endsWith("/")) {
-            DEBUG_PRINTLN("[ZIP] Skip directory");
+        if (internalName.indexOf("..") >= 0) {
+            DEBUG_PRINTLN("[ZIP] Invalid path");
             continue;
         }
 
-        if (name.indexOf("..") >= 0) {
-            DEBUG_PRINTLN("[ZIP] Skip invalid path");
-            continue;
-        }
-
-        if (name.indexOf('/') >= 0 || name.indexOf('\\') >= 0) {
+        if (internalName.indexOf('/') >= 0 || internalName.indexOf('\\') >= 0) {
             DEBUG_PRINTLN("[ZIP] Skip subfolder");
             continue;
         }
 
-        // ---------- Determine output filename ----------
+        // ---------------- SD SPACE CHECK ----------------
+
+        uint64_t freeBytes = SD_ADAPTER.totalBytes() - SD_ADAPTER.usedBytes();
+
+        if (fileInfo.uncompressed_size + 100 > freeBytes)
+        {
+            DEBUG_PRINTF("[ZIP] Not enough SD space. Needed: %lu Free: %llu\n",
+                         (unsigned long)fileInfo.uncompressed_size,
+                         freeBytes);
+            break;
+        }
+
+        // ---------------- OUTPUT FILE ----------------
 
         String outPath;
 
-        if (isXLZ) {
-            // XLZ always contains exactly one FSEQ
-            outPath = zipPath;
-            outPath.replace(".xlz", ".fseq");
+        if (isXLZ)
+        {
+            outPath = "/" + internalName;
         }
         else
         {
-            if (!name.endsWith(".fseq")) {
+            if (!internalName.endsWith(".fseq")) {
                 DEBUG_PRINTLN("[ZIP] Skip non-fseq");
                 continue;
             }
 
-            outPath = "/" + name;
+            outPath = "/" + internalName;
         }
 
-        DEBUG_PRINTF("[ZIP] Extracting -> %s\n", outPath.c_str());
-
-        if (SD_ADAPTER.exists(outPath.c_str())) {
+        if (SD_ADAPTER.exists(outPath.c_str()))
+        {
             SD_ADAPTER.remove(outPath.c_str());
         }
 
@@ -675,7 +680,7 @@ bool unzipFseqFromSD(const String& zipPath)
         }
 
         if (zip.openCurrentFile() != UNZ_OK) {
-            DEBUG_PRINTLN("[ZIP] Failed to open file in ZIP");
+            DEBUG_PRINTLN("[ZIP] Failed to open file");
             outFile.close();
             continue;
         }
@@ -685,7 +690,7 @@ bool unzipFseqFromSD(const String& zipPath)
         while ((len = zip.readCurrentFile(buffer, sizeof(buffer))) > 0)
         {
             outFile.write(buffer, len);
-            yield(); // watchdog safety
+            yield(); // watchdog safe
         }
 
         zip.closeCurrentFile();
@@ -693,9 +698,21 @@ bool unzipFseqFromSD(const String& zipPath)
 
         DEBUG_PRINTF("[ZIP] Extracted %s\n", outPath.c_str());
 
-        // XLZ contains only one file
-        if (isXLZ) {
-            break;
+        // ---------------- XLZ rename logic ----------------
+
+        if (isXLZ)
+        {
+            String finalName = zipPath;
+            finalName.replace(".xlz", ".fseq");
+
+            DEBUG_PRINTF("[ZIP] Rename %s -> %s\n",
+                         outPath.c_str(),
+                         finalName.c_str());
+
+            SD_ADAPTER.remove(finalName.c_str());
+            SD_ADAPTER.rename(outPath.c_str(), finalName.c_str());
+
+            break; // XLZ contains only one file
         }
     }
 
