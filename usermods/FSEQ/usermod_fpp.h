@@ -761,17 +761,18 @@ public:
     // Endpoint for file upload (raw, application/octet-stream)
     server.on(
     "/fpp", HTTP_POST,
-    [](AsyncWebServerRequest *request) {},
+    [](AsyncWebServerRequest *request) {
+    },
     NULL,
     [this](AsyncWebServerRequest *request,
            uint8_t *data, size_t len,
            size_t index, size_t total) {
 
+        // Debug optional:
         DEBUG_PRINTF("[FPP] Chunk index=%u len=%u total=%u\n", index, len, total);
 
         if (index == 0) {
-
-            if (uploadStream || currentUploadFile) {
+			if (uploadStream || currentUploadFile) {
                 request->send(409, "text/plain", "Upload already in progress");
                 return;
             }
@@ -796,7 +797,7 @@ public:
             currentUploadFileName =
                 (fileParam != "")
                     ? (fileParam.startsWith("/") ? fileParam : "/" + fileParam)
-                    : "/upload.bin";
+                    : "/default.fseq";
 
             DEBUG_PRINTF("[FPP] Using filename: %s\n",
                          currentUploadFileName.c_str());
@@ -809,7 +810,7 @@ public:
                 SD_ADAPTER.open(currentUploadFileName.c_str(), FILE_WRITE);
 
             if (!currentUploadFile) {
-                DEBUG_PRINTLN("[FPP] ERROR: Failed to open file");
+                DEBUG_PRINTLN(F("[FPP] ERROR: Failed to open file"));
                 request->send(500, "text/plain", "File open failed");
                 return;
             }
@@ -826,6 +827,8 @@ public:
 
         if (index + len == total) {
 
+            DEBUG_PRINTLN("[FPP] Upload finished");
+
             if (uploadStream) {
                 uploadStream->flush();
                 delete uploadStream;
@@ -836,10 +839,10 @@ public:
                 currentUploadFile.close();
             }
 
-            DEBUG_PRINTF("[FPP] Upload finished: %s\n",
-                         currentUploadFileName.c_str());
-
-            bool unzipNeeded = false;
+            unsigned long duration = millis() - uploadStartTime;
+            DEBUG_PRINTF("[FPP] Upload complete in %lu ms\n", duration);
+			
+			bool unzipNeeded = false;
             String zipFile;
 
             String lower = currentUploadFileName;
@@ -850,11 +853,9 @@ public:
                 zipFile = currentUploadFileName;
             }
 
-            // IMPORTANT: respond to xLights immediately
-            request->send(200, "text/plain", "Upload complete");
-
-            // unzip AFTER response (prevents xLights timeout)
-            if (unzipNeeded) {
+            currentUploadFileName = "";
+			
+			if (unzipNeeded) {
 
                 DEBUG_PRINTLN("[FPP] ZIP detected -> extracting");
 
@@ -866,6 +867,7 @@ public:
                     DEBUG_PRINTLN("[FPP] ZIP extraction finished");
                 }
             }
+            request->send(200, "text/plain", "Upload complete");
         }
     });
 
