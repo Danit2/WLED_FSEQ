@@ -580,116 +580,133 @@ static int32_t zipSeek(void* handle, int32_t position, int mode)
     return 0;
 }
 
-	bool unzipFseqFromSD(const String& zipPath)
-	{
-		DEBUG_PRINTF("[ZIP] Opening ZIP: %s\n", zipPath.c_str());
+bool unzipFseqFromSD(const String& zipPath)
+{
+    DEBUG_PRINTF("[ZIP] Opening ZIP: %s\n", zipPath.c_str());
 
-		int rc = zip.openZIP(
-			zipPath.c_str(),
-			zipOpen,
-			zipClose,
-			zipRead,
-			zipSeek
-		);
+    bool isXLZ = zipPath.endsWith(".xlz");
 
-		if (rc != UNZ_OK) {
-			DEBUG_PRINTF("[ZIP] openZIP failed: %d\n", rc);
-			return false;
-		}
+    int rc = zip.openZIP(
+        zipPath.c_str(),
+        zipOpen,
+        zipClose,
+        zipRead,
+        zipSeek
+    );
 
-		uint8_t buffer[8192];
+    if (rc != UNZ_OK) {
+        DEBUG_PRINTF("[ZIP] openZIP failed: %d\n", rc);
+        return false;
+    }
 
-		unz_file_info fileInfo;
-		char filename[256];
+    uint8_t buffer[8192];
 
-		while (zip.gotoNextFile() == UNZ_OK)
-		{
-			if (zip.getFileInfo(
-					&fileInfo,
-					filename,
-					sizeof(filename),
-					NULL,
-					0,
-					NULL,
-					0) != UNZ_OK)
-			{
-				DEBUG_PRINTLN("[ZIP] Failed to read file info");
-				continue;
-			}
+    unz_file_info fileInfo;
+    char filename[256];
 
-			String name = String(filename);
+    while (zip.gotoNextFile() == UNZ_OK)
+    {
+        if (zip.getFileInfo(
+                &fileInfo,
+                filename,
+                sizeof(filename),
+                NULL,
+                0,
+                NULL,
+                0) != UNZ_OK)
+        {
+            DEBUG_PRINTLN("[ZIP] Failed to read file info");
+            continue;
+        }
 
-			DEBUG_PRINTF("[ZIP] Found: %s (%lu bytes)\n",
-						 name.c_str(),
-						 (unsigned long)fileInfo.uncompressed_size);
+        String name = String(filename);
 
-			// ---------------- SECURITY ----------------
+        DEBUG_PRINTF("[ZIP] Found: %s (%lu bytes)\n",
+                     name.c_str(),
+                     (unsigned long)fileInfo.uncompressed_size);
 
-			if (name.endsWith("/")) {
-				DEBUG_PRINTLN("[ZIP] Skip directory");
-				continue;
-			}
+        // ---------- SECURITY ----------
 
-			if (name.indexOf("..") >= 0) {
-				DEBUG_PRINTLN("[ZIP] Skip invalid path");
-				continue;
-			}
+        if (name.endsWith("/")) {
+            DEBUG_PRINTLN("[ZIP] Skip directory");
+            continue;
+        }
 
-			if (name.indexOf('/') >= 0 || name.indexOf('\\') >= 0) {
-				DEBUG_PRINTLN("[ZIP] Skip subfolder");
-				continue;
-			}
+        if (name.indexOf("..") >= 0) {
+            DEBUG_PRINTLN("[ZIP] Skip invalid path");
+            continue;
+        }
 
-			if (!name.endsWith(".fseq")) {
-				DEBUG_PRINTLN("[ZIP] Skip non-fseq");
-				continue;
-			}
+        if (name.indexOf('/') >= 0 || name.indexOf('\\') >= 0) {
+            DEBUG_PRINTLN("[ZIP] Skip subfolder");
+            continue;
+        }
 
-			// ---------------- WRITE FILE ----------------
+        // ---------- Determine output filename ----------
 
-			String outPath = "/" + name;
+        String outPath;
 
-			DEBUG_PRINTF("[ZIP] Extracting -> %s\n", outPath.c_str());
+        if (isXLZ) {
+            // XLZ always contains exactly one FSEQ
+            outPath = zipPath;
+            outPath.replace(".xlz", ".fseq");
+        }
+        else
+        {
+            if (!name.endsWith(".fseq")) {
+                DEBUG_PRINTLN("[ZIP] Skip non-fseq");
+                continue;
+            }
 
-			if (SD_ADAPTER.exists(outPath.c_str())) {
-				SD_ADAPTER.remove(outPath.c_str());
-			}
+            outPath = "/" + name;
+        }
 
-			File outFile = SD_ADAPTER.open(outPath.c_str(), FILE_WRITE);
+        DEBUG_PRINTF("[ZIP] Extracting -> %s\n", outPath.c_str());
 
-			if (!outFile) {
-				DEBUG_PRINTLN("[ZIP] Cannot create output file");
-				continue;
-			}
+        if (SD_ADAPTER.exists(outPath.c_str())) {
+            SD_ADAPTER.remove(outPath.c_str());
+        }
 
-			if (zip.openCurrentFile() != UNZ_OK) {
-				DEBUG_PRINTLN("[ZIP] Failed to open file in ZIP");
-				outFile.close();
-				continue;
-			}
+        File outFile = SD_ADAPTER.open(outPath.c_str(), FILE_WRITE);
 
-			int len;
+        if (!outFile) {
+            DEBUG_PRINTLN("[ZIP] Cannot create output file");
+            continue;
+        }
 
-			while ((len = zip.readCurrentFile(buffer, sizeof(buffer))) > 0)
-			{
-				outFile.write(buffer, len);
-				yield();  // watchdog safety
-			}
+        if (zip.openCurrentFile() != UNZ_OK) {
+            DEBUG_PRINTLN("[ZIP] Failed to open file in ZIP");
+            outFile.close();
+            continue;
+        }
 
-			zip.closeCurrentFile();
-			outFile.close();
+        int len;
 
-			DEBUG_PRINTF("[ZIP] Extracted %s\n", outPath.c_str());
-		}
+        while ((len = zip.readCurrentFile(buffer, sizeof(buffer))) > 0)
+        {
+            outFile.write(buffer, len);
+            yield(); // watchdog safety
+        }
 
-		zip.closeZIP();
+        zip.closeCurrentFile();
+        outFile.close();
 
-		SD_ADAPTER.remove(zipPath.c_str());
+        DEBUG_PRINTF("[ZIP] Extracted %s\n", outPath.c_str());
 
-		DEBUG_PRINTLN("[ZIP] Extraction finished");
+        // XLZ contains only one file
+        if (isXLZ) {
+            break;
+        }
+    }
 
-		return true;
-	}
+    zip.closeZIP();
+
+    SD_ADAPTER.remove(zipPath.c_str());
+
+    DEBUG_PRINTLN("[ZIP] Extraction finished");
+
+    return true;
+}
 
 public:
   static const char _name[];
