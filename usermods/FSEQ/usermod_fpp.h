@@ -147,6 +147,7 @@ private:
     doc["minorVersion"] = minor;
     doc["typeId"] = 195;
     doc["UUID"] = WiFi.macAddress();
+	doc["zip"] = true;
 
     JsonObject utilization = doc.createNestedObject("Utilization");
     utilization["MemoryFree"] = ESP.getFreeHeap();
@@ -273,7 +274,6 @@ private:
 	  adv["minorVersion"] = minor;
 	  adv["typeId"] = 195;
 	  adv["UUID"] = WiFi.macAddress();
-	  adv["zip"] = true;
 
 	  JsonObject util = adv.createNestedObject("Utilization");
 	  util["MemoryFree"] = ESP.getFreeHeap();
