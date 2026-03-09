@@ -738,7 +738,7 @@ public:
   void setup() {
     DEBUG_PRINTF("[%s] FPP Usermod loaded\n", _name);
 	
-	extractXLZOnBoot();
+	scanForXLZ();
 
     // Register API endpoints
     server.on("/api/system/info", HTTP_GET,
