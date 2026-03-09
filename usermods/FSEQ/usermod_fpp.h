@@ -629,18 +629,25 @@ bool unzipFseqFromSD(const String& zipPath)
 
         DEBUG_PRINTF("[ZIP] Found: %s\n", name.c_str());
 
-        // security
-        if (name.indexOf("..") >= 0) goto next;
+        // SECURITY
+        if (name.indexOf("..") >= 0) {
+            DEBUG_PRINTLN("[ZIP] Invalid path");
+            goto_next:
+            if (zip.gotoNextFile() != UNZ_OK) break;
+            continue;
+        }
 
         if (name.indexOf('/') >= 0 || name.indexOf('\\') >= 0) {
             DEBUG_PRINTLN("[ZIP] Skip folder entry");
-            goto next;
+            if (zip.gotoNextFile() != UNZ_OK) break;
+            continue;
         }
 
-        // only fseq
+        // ONLY FSEQ
         if (!name.endsWith(".fseq")) {
             DEBUG_PRINTLN("[ZIP] Skip non-fseq");
-            goto next;
+            if (zip.gotoNextFile() != UNZ_OK) break;
+            continue;
         }
 
         String outPath = "/" + name;
@@ -654,13 +661,15 @@ bool unzipFseqFromSD(const String& zipPath)
 
         if (!outFile) {
             DEBUG_PRINTLN("[ZIP] Failed to create file");
-            goto next;
+            if (zip.gotoNextFile() != UNZ_OK) break;
+            continue;
         }
 
         if (zip.openCurrentFile() != UNZ_OK) {
             DEBUG_PRINTLN("[ZIP] openCurrentFile failed");
             outFile.close();
-            goto next;
+            if (zip.gotoNextFile() != UNZ_OK) break;
+            continue;
         }
 
         int len;
@@ -677,8 +686,6 @@ bool unzipFseqFromSD(const String& zipPath)
         DEBUG_PRINTF("[ZIP] Extracted: %s\n", outPath.c_str());
 
         extracted = true;
-
-    next:
 
         if (zip.gotoNextFile() != UNZ_OK)
             break;
