@@ -183,8 +183,7 @@ void FSEQPlayer::loadRecording(const char *filepath,
     if (currentFileName.startsWith("/"))
       currentFileName = currentFileName.substring(1);
   } else {
-    DEBUG_PRINTF("File %s not found (%s)\n", filepath,
-                 USED_STORAGE_FILESYSTEMS);
+    DEBUG_PRINTF("File %s not found (%s)\n", filepath);
     return;
   }
   if ((uint64_t)recordingFile.available() < sizeof(file_header)) {
