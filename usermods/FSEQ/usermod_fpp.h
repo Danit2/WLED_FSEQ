@@ -841,33 +841,10 @@ public:
 
             unsigned long duration = millis() - uploadStartTime;
             DEBUG_PRINTF("[FPP] Upload complete in %lu ms\n", duration);
-			
-			bool unzipNeeded = false;
-            String zipFile;
-
-            String lower = currentUploadFileName;
-            lower.toLowerCase();
-
-            if (lower.endsWith(".xlz") || lower.endsWith(".zip")) {
-                unzipNeeded = true;
-                zipFile = currentUploadFileName;
-            }
 
             currentUploadFileName = "";
             request->send(200, "text/plain", "Upload complete");
 			
-			if (unzipNeeded) {
-
-                DEBUG_PRINTLN("[FPP] ZIP detected -> extracting");
-
-                bool ok = unzipFseqFromSD(zipFile);
-
-                if (!ok) {
-                    DEBUG_PRINTLN("[FPP] ZIP extraction failed");
-                } else {
-                    DEBUG_PRINTLN("[FPP] ZIP extraction finished");
-                }
-            }
         }
     });
 
