@@ -543,7 +543,11 @@ void sendPingPacket(IPAddress destination = IPAddress(255, 255, 255, 255)) {
     }
   }
 
-static uint8_t xlzBuffer[2048];
+#ifndef XLZ_BUFFER_SIZE
+  #define XLZ_BUFFER_SIZE 2048   // 1024 oder 2048 ist meist deutlich stabiler als 8192
+#endif
+
+static uint8_t xlzBuffer[XLZ_BUFFER_SIZE];
 
 static void* zipOpen(const char* filename, int32_t* size)
 {
