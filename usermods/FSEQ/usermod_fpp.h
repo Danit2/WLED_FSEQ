@@ -841,8 +841,20 @@ public:
 
             unsigned long duration = millis() - uploadStartTime;
             DEBUG_PRINTF("[FPP] Upload complete in %lu ms\n", duration);
+			
+			bool unzipNeeded = false;
+            String zipFile;
+
+            String lower = currentUploadFileName;
+            lower.toLowerCase();
+
+            if (lower.endsWith(".xlz") || lower.endsWith(".zip")) {
+                unzipNeeded = true;
+                zipFile = currentUploadFileName;
+            }
 
             currentUploadFileName = "";
+			
             request->send(200, "text/plain", "Upload complete");
 			
         }
