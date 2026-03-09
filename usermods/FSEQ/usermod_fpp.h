@@ -761,18 +761,17 @@ public:
     // Endpoint for file upload (raw, application/octet-stream)
     server.on(
     "/fpp", HTTP_POST,
-    [](AsyncWebServerRequest *request) {
-    },
+    [](AsyncWebServerRequest *request) {},
     NULL,
     [this](AsyncWebServerRequest *request,
            uint8_t *data, size_t len,
            size_t index, size_t total) {
 
-        // Debug optional:
         DEBUG_PRINTF("[FPP] Chunk index=%u len=%u total=%u\n", index, len, total);
 
         if (index == 0) {
-			if (uploadStream || currentUploadFile) {
+
+            if (uploadStream || currentUploadFile) {
                 request->send(409, "text/plain", "Upload already in progress");
                 return;
             }
@@ -797,7 +796,7 @@ public:
             currentUploadFileName =
                 (fileParam != "")
                     ? (fileParam.startsWith("/") ? fileParam : "/" + fileParam)
-                    : "/default.fseq";
+                    : "/upload.bin";
 
             DEBUG_PRINTF("[FPP] Using filename: %s\n",
                          currentUploadFileName.c_str());
@@ -810,7 +809,7 @@ public:
                 SD_ADAPTER.open(currentUploadFileName.c_str(), FILE_WRITE);
 
             if (!currentUploadFile) {
-                DEBUG_PRINTLN(F("[FPP] ERROR: Failed to open file"));
+                DEBUG_PRINTLN("[FPP] ERROR: Failed to open file");
                 request->send(500, "text/plain", "File open failed");
                 return;
             }
@@ -825,34 +824,50 @@ public:
             uploadStream->write(data, len);
         }
 
-		if (index + len == total) {
+        if (index + len == total) {
 
-			if (uploadStream) {
-				uploadStream->flush();
-				delete uploadStream;
-				uploadStream = nullptr;
-			}
+            if (uploadStream) {
+                uploadStream->flush();
+                delete uploadStream;
+                uploadStream = nullptr;
+            }
 
-			if (currentUploadFile) {
-				currentUploadFile.close();
-			}
+            if (currentUploadFile) {
+                currentUploadFile.close();
+            }
 
-			if (currentUploadFileName.endsWith(".xlz")) {
+            DEBUG_PRINTF("[FPP] Upload finished: %s\n",
+                         currentUploadFileName.c_str());
 
-				DEBUG_PRINTLN("[FPP] ZIP detected -> extracting");
+            bool unzipNeeded = false;
+            String zipFile;
 
-				bool ok = unzipFseqFromSD(currentUploadFileName);
+            String lower = currentUploadFileName;
+            lower.toLowerCase();
 
-				if (!ok) {
-					request->send(500, "text/plain", "ZIP extraction failed");
-					return;
-				}
-			}
+            if (lower.endsWith(".xlz") || lower.endsWith(".zip")) {
+                unzipNeeded = true;
+                zipFile = currentUploadFileName;
+            }
 
-			request->send(200, "text/plain", "Upload complete");
-		}
+            // IMPORTANT: respond to xLights immediately
+            request->send(200, "text/plain", "Upload complete");
+
+            // unzip AFTER response (prevents xLights timeout)
+            if (unzipNeeded) {
+
+                DEBUG_PRINTLN("[FPP] ZIP detected -> extracting");
+
+                bool ok = unzipFseqFromSD(zipFile);
+
+                if (!ok) {
+                    DEBUG_PRINTLN("[FPP] ZIP extraction failed");
+                } else {
+                    DEBUG_PRINTLN("[FPP] ZIP extraction finished");
+                }
+            }
+        }
     });
-
 
     // Endpoint to list FSEQ files on SD card
     server.on("/fseqfilelist", HTTP_GET, [](AsyncWebServerRequest *request) {
