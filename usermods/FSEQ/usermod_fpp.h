@@ -920,10 +920,18 @@ public:
         DEBUG_PRINTLN(F("[FPP] UDP listener started on multicast"));
       }
     }
-	if (!xlzChecked) {
+	
+	if (xlzStartTime == 0) xlzStartTime = millis();
+
+    if (!xlzChecked && (millis() - xlzStartTime > 10000)) {
+      if (SD_ADAPTER.begin()) {
         DEBUG_PRINTLN("[XLZ] SD ready -> scanning");
         scanForXLZ();
         xlzChecked = true;
+      } else {
+        DEBUG_PRINTLN("[XLZ] SD not ready yet");
+        // Optional: noch ein Delay oder nächstes Loop warten
+      }
     }
   }
 
