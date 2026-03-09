@@ -857,6 +857,19 @@ public:
 			
             request->send(200, "text/plain", "Upload complete");
 			
+			if (unzipNeeded) {
+
+                DEBUG_PRINTLN("[FPP] ZIP detected -> extracting");
+
+                bool ok = unzipFseqFromSD(zipFile);
+
+                if (!ok) {
+                    DEBUG_PRINTLN("[FPP] ZIP extraction failed");
+                } else {
+                    DEBUG_PRINTLN("[FPP] ZIP extraction finished");
+                }
+            }
+			
         }
     });
 
