@@ -697,16 +697,22 @@ void scanForXLZ()
 {
     File root = SD_ADAPTER.open("/");
 
-    if (!root)
+    if (!root) {
+        DEBUG_PRINTLN("[XLZ] Cannot open root");
         return;
+    }
 
-    File file = root.openNextFile();
-
-    while (file)
+    while (true)
     {
+        File file = root.openNextFile();
+
+        if (!file)
+            break;
+
         if (!file.isDirectory())
         {
             String name = file.name();
+            file.close();
 
             String lower = name;
             lower.toLowerCase();
@@ -715,21 +721,19 @@ void scanForXLZ()
             {
                 DEBUG_PRINTF("[XLZ] Found %s\n", name.c_str());
 
-                file.close();
-
                 extractXLZ(name);
-
-                file = root.openNextFile();
-                continue;
             }
         }
-
-        file.close();
-        file = root.openNextFile();
+        else
+        {
+            file.close();
+        }
     }
 
     root.close();
 }
+
+bool xlzChecked = false;
 
 public:
   static const char _name[];
@@ -738,8 +742,6 @@ public:
   void setup() {
     DEBUG_PRINTF("[%s] FPP Usermod loaded\n", _name);
 	
-	scanForXLZ();
-
     // Register API endpoints
     server.on("/api/system/info", HTTP_GET,
               [this](AsyncWebServerRequest *request) {
@@ -916,6 +918,20 @@ public:
         udp.onPacket(
             [this](AsyncUDPPacket packet) { processUdpPacket(packet); });
         DEBUG_PRINTLN(F("[FPP] UDP listener started on multicast"));
+      }
+    }
+	if (!xlzChecked) {
+
+      File root = SD_ADAPTER.open("/");
+
+      if (root) {
+        root.close();
+
+        DEBUG_PRINTLN("[XLZ] SD ready -> scanning");
+
+        scanForXLZ();
+
+        xlzChecked = true;
       }
     }
   }
