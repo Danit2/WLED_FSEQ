@@ -920,19 +920,10 @@ public:
         DEBUG_PRINTLN(F("[FPP] UDP listener started on multicast"));
       }
     }
-	if (!xlzChecked) {
-
-      File root = SD_ADAPTER.open("/");
-
-      if (root) {
-        root.close();
-
+	if (!xlzChecked && SD_ADAPTER.begin()) {
         DEBUG_PRINTLN("[XLZ] SD ready -> scanning");
-
         scanForXLZ();
-
         xlzChecked = true;
-      }
     }
   }
 
