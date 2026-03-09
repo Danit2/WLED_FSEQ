@@ -16,6 +16,12 @@
 #include <unzipLIB.h>
 UNZIP zip;
 
+#ifndef XLZ_BUFFER_SIZE
+  #define XLZ_BUFFER_SIZE 2048
+#endif
+
+static uint8_t xlzBuffer[XLZ_BUFFER_SIZE];
+
 // ----- Minimal WriteBufferingStream Implementation -----
 // This class buffers data before writing it to an underlying Stream.
 class WriteBufferingStream : public Stream {
@@ -542,12 +548,6 @@ void sendPingPacket(IPAddress destination = IPAddress(255, 255, 255, 255)) {
       break;
     }
   }
-
-#ifndef XLZ_BUFFER_SIZE
-  #define XLZ_BUFFER_SIZE 2048   // 1024 oder 2048 ist meist deutlich stabiler als 8192
-#endif
-
-static uint8_t xlzBuffer[XLZ_BUFFER_SIZE];
 
 static void* zipOpen(const char* filename, int32_t* size)
 {
