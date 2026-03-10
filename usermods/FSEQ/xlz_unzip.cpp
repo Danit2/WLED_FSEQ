@@ -1,10 +1,5 @@
 #include "xlz_unzip.h"
-
-#ifdef WLED_USE_SD_SPI
-#include <SD.h>
-#elif defined(WLED_USE_SD_MMC)
-#include "SD_MMC.h"
-#endif
+#include "usermod_fseq.h" // Contains FSEQ playback logic and getter methods for pins
 
 namespace {
 constexpr size_t XLZ_BUFFER_SIZE = 8192;
