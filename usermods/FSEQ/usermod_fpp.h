@@ -652,7 +652,16 @@ public:
             }
 
             unsigned long duration = millis() - uploadStartTime;
-            DEBUG_PRINTF("[FPP] Upload complete in %lu ms\n", duration);
+			DEBUG_PRINTF("[FPP] Upload complete in %lu ms\n", duration);
+
+			if (uploadedFile.endsWith(".xlz") || uploadedFile.endsWith(".XLZ")) {
+				String outFile;
+				if (XLZUnzip::unpackAndDelete(uploadedFile, &outFile)) {
+					DEBUG_PRINTF("[FPP] XLZ unpacked to: %s\n", outFile.c_str());
+				} else {
+					DEBUG_PRINTF("[FPP] Failed to unpack XLZ: %s\n", uploadedFile.c_str());
+				}
+			}
 
             currentUploadFileName = "";
 			
@@ -735,7 +744,7 @@ public:
 		DEBUG_PRINTF("[XLZ] start timer at %lu\n", xlzStartTime);
 	  }
 
-	  if (!xlzChecked && (millis() - xlzStartTime >= 10000)) {
+	  if (!xlzChecked && (millis() - xlzStartTime >= 2000)) {
 		DEBUG_PRINTF("[XLZ] 10s reached, starting scan at %lu\n", millis());
 
 		File root = SD_ADAPTER.open("/");
