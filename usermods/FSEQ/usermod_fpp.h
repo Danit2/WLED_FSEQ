@@ -722,27 +722,37 @@ public:
 
   // Main loop function
   void loop() {
-    if (!udpStarted && (WiFi.status() == WL_CONNECTED)) {
-      if (udp.listenMulticast(multicastAddr, udpPort)) {
-        udpStarted = true;
-        udp.onPacket(
-            [this](AsyncUDPPacket packet) { processUdpPacket(packet); });
-        DEBUG_PRINTLN(F("[FPP] UDP listener started on multicast"));
-      }
-    }
-	if (xlzStartTime == 0) xlzStartTime = millis();
+	  if (!udpStarted && (WiFi.status() == WL_CONNECTED)) {
+		if (udp.listenMulticast(multicastAddr, udpPort)) {
+		  udpStarted = true;
+		  udp.onPacket([this](AsyncUDPPacket packet) { processUdpPacket(packet); });
+		  DEBUG_PRINTLN(F("[FPP] UDP listener started on multicast"));
+		}
+	  }
 
-    if (!xlzChecked && (millis() - xlzStartTime > 10000)) {
-      if (SD_ADAPTER.begin()) {
-        DEBUG_PRINTLN("[XLZ] SD ready -> scanning");
-        XLZUnzip::processAllPendingXLZ();
-        xlzChecked = true;
-      } else {
-        DEBUG_PRINTLN("[XLZ] SD not ready yet");
-        // Optional: noch ein Delay oder nächstes Loop warten
-      }
-    }
-  }
+	  if (xlzStartTime == 0) {
+		xlzStartTime = millis();
+		DEBUG_PRINTF("[XLZ] start timer at %lu\n", xlzStartTime);
+	  }
+
+	  if (!xlzChecked && (millis() - xlzStartTime >= 10000)) {
+		DEBUG_PRINTF("[XLZ] 10s reached, starting scan at %lu\n", millis());
+
+		File root = SD_ADAPTER.open("/");
+		if (!root || !root.isDirectory()) {
+		  DEBUG_PRINTLN("[XLZ] SD root not accessible");
+		  if (root) root.close();
+		  return;
+		}
+
+		root.close();
+
+		DEBUG_PRINTLN("[XLZ] SD ready -> scanning");
+		XLZUnzip::processAllPendingXLZ();
+		xlzChecked = true;
+		DEBUG_PRINTLN("[XLZ] startup scan finished");
+	  }
+	}
   uint16_t getId() override { return USERMOD_ID_FPP; }
   void addToConfig(JsonObject &root) override {}
   bool readFromConfig(JsonObject &root) override { return true; }
