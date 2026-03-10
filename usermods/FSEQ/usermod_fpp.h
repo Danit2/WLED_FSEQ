@@ -571,104 +571,105 @@ public:
     // Other API endpoints as needed...
 
     // Endpoint for file upload (raw, application/octet-stream)
-    server.on(
-    "/fpp", HTTP_POST,
-    [](AsyncWebServerRequest *request) {
-    },
-    NULL,
-    [this](AsyncWebServerRequest *request,
-           uint8_t *data, size_t len,
-           size_t index, size_t total) {
+	server.on(
+		"/fpp", HTTP_POST,
+		[](AsyncWebServerRequest *request) {
+		},
+		NULL,
+		[this](AsyncWebServerRequest *request,
+			   uint8_t *data, size_t len,
+			   size_t index, size_t total) {
 
-        // Debug optional:
-        DEBUG_PRINTF("[FPP] Chunk index=%u len=%u total=%u\n", index, len, total);
+			DEBUG_PRINTF("[FPP] Chunk index=%u len=%u total=%u\n", index, len, total);
 
-        if (index == 0) {
-			if (uploadStream || currentUploadFile) {
-                request->send(409, "text/plain", "Upload already in progress");
-                return;
-            }
-
-            DEBUG_PRINTLN("[FPP] Starting file upload");
-
-            if (uploadStream) {
-                uploadStream->flush();
-                delete uploadStream;
-                uploadStream = nullptr;
-            }
-
-            if (currentUploadFile) {
-                currentUploadFile.close();
-            }
-
-            String fileParam = "";
-            if (request->hasParam("filename")) {
-                fileParam = request->arg("filename");
-            }
-
-            currentUploadFileName =
-                (fileParam != "")
-                    ? (fileParam.startsWith("/") ? fileParam : "/" + fileParam)
-                    : "/default.fseq";
-
-            DEBUG_PRINTF("[FPP] Using filename: %s\n",
-                         currentUploadFileName.c_str());
-
-            if (SD_ADAPTER.exists(currentUploadFileName.c_str())) {
-                SD_ADAPTER.remove(currentUploadFileName.c_str());
-            }
-
-            currentUploadFile =
-                SD_ADAPTER.open(currentUploadFileName.c_str(), FILE_WRITE);
-
-            if (!currentUploadFile) {
-                DEBUG_PRINTLN(F("[FPP] ERROR: Failed to open file"));
-                request->send(500, "text/plain", "File open failed");
-                return;
-            }
-
-            uploadStream = new WriteBufferingStream(
-                currentUploadFile, FILE_UPLOAD_BUFFER_SIZE);
-
-            uploadStartTime = millis();
-        }
-
-        if (uploadStream) {
-            uploadStream->write(data, len);
-        }
-
-        if (index + len == total) {
-
-            DEBUG_PRINTLN("[FPP] Upload finished");
-
-            if (uploadStream) {
-                uploadStream->flush();
-                delete uploadStream;
-                uploadStream = nullptr;
-            }
-
-            if (currentUploadFile) {
-                currentUploadFile.close();
-            }
-
-            unsigned long duration = millis() - uploadStartTime;
-			DEBUG_PRINTF("[FPP] Upload complete in %lu ms\n", duration);
-
-			if (currentUploadFile.endsWith(".xlz") || currentUploadFile.endsWith(".XLZ")) {
-				String outFile;
-				if (XLZUnzip::unpackAndDelete(currentUploadFile, &outFile)) {
-					DEBUG_PRINTF("[FPP] XLZ unpacked to: %s\n", outFile.c_str());
-				} else {
-					DEBUG_PRINTF("[FPP] Failed to unpack XLZ: %s\n", currentUploadFile.c_str());
+			if (index == 0) {
+				if (uploadStream || currentUploadFile) {
+					request->send(409, "text/plain", "Upload already in progress");
+					return;
 				}
+
+				DEBUG_PRINTLN("[FPP] Starting file upload");
+
+				if (uploadStream) {
+					uploadStream->flush();
+					delete uploadStream;
+					uploadStream = nullptr;
+				}
+
+				if (currentUploadFile) {
+					currentUploadFile.close();
+				}
+
+				String fileParam = "";
+				if (request->hasParam("filename")) {
+					fileParam = request->arg("filename");
+				}
+
+				currentUploadFileName =
+					(fileParam != "")
+						? (fileParam.startsWith("/") ? fileParam : "/" + fileParam)
+						: "/default.fseq";
+
+				DEBUG_PRINTF("[FPP] Using filename: %s\n",
+							 currentUploadFileName.c_str());
+
+				if (SD_ADAPTER.exists(currentUploadFileName.c_str())) {
+					SD_ADAPTER.remove(currentUploadFileName.c_str());
+				}
+
+				currentUploadFile =
+					SD_ADAPTER.open(currentUploadFileName.c_str(), FILE_WRITE);
+
+				if (!currentUploadFile) {
+					DEBUG_PRINTLN(F("[FPP] ERROR: Failed to open file"));
+					request->send(500, "text/plain", "File open failed");
+					return;
+				}
+
+				uploadStream = new WriteBufferingStream(
+					currentUploadFile, FILE_UPLOAD_BUFFER_SIZE);
+
+				uploadStartTime = millis();
 			}
 
-            currentUploadFileName = "";
-			
-            request->send(200, "text/plain", "Upload complete");
-			
-        }
-    });
+			if (uploadStream) {
+				uploadStream->write(data, len);
+			}
+
+			if (index + len == total) {
+				DEBUG_PRINTLN("[FPP] Upload finished");
+
+				if (uploadStream) {
+					uploadStream->flush();
+					delete uploadStream;
+					uploadStream = nullptr;
+				}
+
+				String uploadedFile = currentUploadFileName;
+
+				if (currentUploadFile) {
+					currentUploadFile.close();
+				}
+
+				unsigned long duration = millis() - uploadStartTime;
+				DEBUG_PRINTF("[FPP] Upload complete in %lu ms\n", duration);
+
+				String lowerName = uploadedFile;
+				lowerName.toLowerCase();
+
+				if (lowerName.endsWith(".xlz")) {
+					String outFile;
+					if (XLZUnzip::unpackAndDelete(uploadedFile, &outFile)) {
+						DEBUG_PRINTF("[FPP] XLZ unpacked to: %s\n", outFile.c_str());
+					} else {
+						DEBUG_PRINTF("[FPP] Failed to unpack XLZ: %s\n", uploadedFile.c_str());
+					}
+				}
+
+				currentUploadFileName = "";
+				request->send(200, "text/plain", "Upload complete");
+			}
+		});
 
     // Endpoint to list FSEQ files on SD card
     server.on("/fseqfilelist", HTTP_GET, [](AsyncWebServerRequest *request) {
