@@ -698,18 +698,19 @@ public:
     }
 
     if (!xlzChecked && (millis() - xlzStartTime >= 2000)) {
+      xlzChecked = true;
+
       DEBUG_PRINTF("[XLZ] 2s reached, starting startup scan at %lu\n", millis());
 
       File root = SD_ADAPTER.open("/");
       if (!root || !root.isDirectory()) {
-        DEBUG_PRINTLN("[XLZ] SD root not accessible");
+        DEBUG_PRINTLN("[XLZ] SD root not accessible, skipping startup scan");
         if (root) root.close();
       } else {
         root.close();
         DEBUG_PRINTLN("[XLZ] SD ready -> startup scanning");
         XLZUnzip::processAllPendingXLZ();
         DEBUG_PRINTLN("[XLZ] startup scan finished");
-        xlzChecked = true;
       }
     }
 
