@@ -742,7 +742,7 @@ public:
         // Optional: noch ein Delay oder nächstes Loop warten
       }
     }
-
+  }
   uint16_t getId() override { return USERMOD_ID_FPP; }
   void addToConfig(JsonObject &root) override {}
   bool readFromConfig(JsonObject &root) override { return true; }
