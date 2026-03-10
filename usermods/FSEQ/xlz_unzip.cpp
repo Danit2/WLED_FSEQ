@@ -4,6 +4,11 @@
 namespace {
 constexpr size_t XLZ_BUFFER_SIZE = 8192;
 
+// IMPORTANT: unzipLIB uses a fixed internal structure of roughly 41 KB.
+// Do NOT put UNZIP on the task stack (e.g. as a local variable in loop()).
+// Keeping one static instance avoids stack-canary panics in loopTask.
+static UNZIP g_xlzZip;
+
 static bool endsWithIgnoreCase(const String& value, const char* suffix) {
   const size_t n = strlen(suffix);
   if (value.length() < n) return false;
@@ -11,13 +16,9 @@ static bool endsWithIgnoreCase(const String& value, const char* suffix) {
 }
 
 static String normalizePath(const String& path) {
-  String normalized = path;
-  normalized.trim();
-
-  if (normalized.isEmpty()) return String("/");
-  if (!normalized.startsWith("/")) normalized = "/" + normalized;
-
-  return normalized;
+  if (path.isEmpty()) return String("/");
+  if (path[0] == '/') return path;
+  return String("/") + path;
 }
 } // namespace
 
@@ -30,6 +31,7 @@ void* XLZUnzip::openZip(const char* filename, int32_t* size) {
 
   String path = filename ? String(filename) : String();
   path = normalizePath(path);
+  DEBUG_PRINTF("[XLZ] openZip('%s')\n", path.c_str());
 
   FsHandle* h = new FsHandle();
   h->file = SD_ADAPTER.open(path.c_str(), FILE_READ);
@@ -42,9 +44,6 @@ void* XLZUnzip::openZip(const char* filename, int32_t* size) {
 
   if (size) *size = static_cast<int32_t>(h->file.size());
   h->pos = 0;
-
-  DEBUG_PRINTF("[XLZ] openZip ok: %s (%ld bytes)\n",
-               path.c_str(), static_cast<long>(*size));
   return h;
 }
 
@@ -194,12 +193,12 @@ bool XLZUnzip::unpackCurrentFile(UNZIP& zip, const String& outputPath, uint32_t 
 }
 
 bool XLZUnzip::unpackArchive(const String& archivePath, String& finalOutputPath) {
-  const String normalizedArchivePath = normalizePath(archivePath);
+  const String zipPath = normalizePath(archivePath);
+  DEBUG_PRINTF("[XLZ] unpackArchive('%s')\n", zipPath.c_str());
 
-  UNZIP zip;
-  const int openRc = zip.openZIP(normalizedArchivePath.c_str(), openZip, closeZip, readZip, seekZip);
+  const int openRc = g_xlzZip.openZIP(zipPath.c_str(), openZip, closeZip, readZip, seekZip);
   if (openRc != UNZ_OK) {
-    DEBUG_PRINTF("[XLZ] openZIP() failed for %s: %d\n", normalizedArchivePath.c_str(), openRc);
+    DEBUG_PRINTF("[XLZ] openZIP() failed for %s: %d\n", zipPath.c_str(), openRc);
     return false;
   }
 
@@ -208,29 +207,28 @@ bool XLZUnzip::unpackArchive(const String& archivePath, String& finalOutputPath)
   char entryName[256] = {0};
   char comment[64] = {0};
 
-  if (zip.gotoFirstFile() != UNZ_OK) {
+  if (g_xlzZip.gotoFirstFile() != UNZ_OK) {
     DEBUG_PRINTLN(F("[XLZ] Archive contains no files"));
-    zip.closeZIP();
+    g_xlzZip.closeZIP();
     return false;
   }
 
-  const int infoRc = zip.getFileInfo(&fileInfo, entryName, sizeof(entryName),
-                                     nullptr, 0, comment, sizeof(comment));
+  const int infoRc = g_xlzZip.getFileInfo(&fileInfo, entryName, sizeof(entryName),
+                                          nullptr, 0, comment, sizeof(comment));
   if (infoRc != UNZ_OK) {
     DEBUG_PRINTF("[XLZ] getFileInfo() failed: %d\n", infoRc);
-    zip.closeZIP();
+    g_xlzZip.closeZIP();
     return false;
   }
 
   String safeName = sanitizeEntryName(entryName);
   if (safeName.isEmpty()) {
     DEBUG_PRINTLN(F("[XLZ] Invalid filename inside archive"));
-    zip.closeZIP();
+    g_xlzZip.closeZIP();
     return false;
   }
 
-  // xLights .xlz archives contain one compressed .fseq; we always write it next to the archive.
-  finalOutputPath = normalizedArchivePath;
+  finalOutputPath = zipPath;
   if (hasXLZExtension(finalOutputPath)) {
     finalOutputPath.remove(finalOutputPath.length() - 4);
     finalOutputPath += ".fseq";
@@ -248,44 +246,44 @@ bool XLZUnzip::unpackArchive(const String& archivePath, String& finalOutputPath)
     DEBUG_PRINTF("[XLZ] Not enough free space. need=%lu free=%lu\n",
                  static_cast<unsigned long>(fileInfo.uncompressed_size),
                  static_cast<unsigned long>(freeBytes));
-    zip.closeZIP();
+    g_xlzZip.closeZIP();
     return false;
   }
 
-  DEBUG_PRINTF("[XLZ] Extracting %s -> %s\n", normalizedArchivePath.c_str(), finalOutputPath.c_str());
-  ok = unpackCurrentFile(zip, finalOutputPath, static_cast<uint32_t>(fileInfo.uncompressed_size));
+  DEBUG_PRINTF("[XLZ] Extracting %s -> %s\n", zipPath.c_str(), finalOutputPath.c_str());
+  ok = unpackCurrentFile(g_xlzZip, finalOutputPath, static_cast<uint32_t>(fileInfo.uncompressed_size));
 
-  const int nextRc = zip.gotoNextFile();
+  const int nextRc = g_xlzZip.gotoNextFile();
   if (ok && nextRc == UNZ_OK) {
     DEBUG_PRINTLN(F("[XLZ] Warning: archive contains more than one file; only the first file was extracted"));
   }
 
-  zip.closeZIP();
+  g_xlzZip.closeZIP();
   return ok;
 }
 
 bool XLZUnzip::unpackAndDelete(const String& archivePath, String* outFile) {
-  if (!hasXLZExtension(archivePath)) {
-    DEBUG_PRINTF("[XLZ] Not an .xlz file: %s\n", archivePath.c_str());
+  DEBUG_PRINTF("[XLZ] raw archivePath='%s'\n", archivePath.c_str());
+
+  const String zipPath = normalizePath(archivePath);
+  DEBUG_PRINTF("[XLZ] normalized archivePath='%s'\n", zipPath.c_str());
+
+  if (!hasXLZExtension(zipPath)) {
+    DEBUG_PRINTF("[XLZ] Not an .xlz file: %s\n", zipPath.c_str());
     return false;
   }
 
-  const String normalizedArchivePath = normalizePath(archivePath);
-
-  DEBUG_PRINTF("[XLZ] raw archivePath='%s'\n", archivePath.c_str());
-  DEBUG_PRINTF("[XLZ] normalized archivePath='%s'\n", normalizedArchivePath.c_str());
-
-  if (!SD_ADAPTER.exists(normalizedArchivePath.c_str())) {
-    DEBUG_PRINTF("[XLZ] Archive not found: %s\n", normalizedArchivePath.c_str());
+  if (!SD_ADAPTER.exists(zipPath.c_str())) {
+    DEBUG_PRINTF("[XLZ] Archive not found: %s\n", zipPath.c_str());
     return false;
   }
 
   String finalOutputPath;
-  const bool ok = unpackArchive(normalizedArchivePath, finalOutputPath);
+  const bool ok = unpackArchive(zipPath, finalOutputPath);
   if (!ok) return false;
 
-  if (!SD_ADAPTER.remove(normalizedArchivePath.c_str())) {
-    DEBUG_PRINTF("[XLZ] Extracted, but could not delete archive: %s\n", normalizedArchivePath.c_str());
+  if (!SD_ADAPTER.remove(zipPath.c_str())) {
+    DEBUG_PRINTF("[XLZ] Extracted, but could not delete archive: %s\n", zipPath.c_str());
   }
 
   if (outFile) {
@@ -302,7 +300,6 @@ uint8_t XLZUnzip::processAllPendingXLZ() {
   File root = SD_ADAPTER.open("/");
   if (!root || !root.isDirectory()) {
     DEBUG_PRINTLN("[XLZ] failed to open root directory");
-    if (root) root.close();
     return 0;
   }
 
@@ -310,8 +307,7 @@ uint8_t XLZUnzip::processAllPendingXLZ() {
   File file = root.openNextFile();
   while (file) {
     String path = String(file.name());
-    if (!path.startsWith("/")) path = "/" + path;
-
+    path = normalizePath(path);
     DEBUG_PRINTF("[XLZ] found entry: %s\n", path.c_str());
 
     const bool isDir = file.isDirectory();
@@ -321,8 +317,6 @@ uint8_t XLZUnzip::processAllPendingXLZ() {
       DEBUG_PRINTF("[XLZ] unpacking: %s\n", path.c_str());
       if (unpackAndDelete(path, nullptr)) {
         ++count;
-      } else {
-        DEBUG_PRINTF("[XLZ] unpack failed -> %s\n", path.c_str());
       }
     }
 
@@ -331,6 +325,6 @@ uint8_t XLZUnzip::processAllPendingXLZ() {
   }
 
   root.close();
-  DEBUG_PRINTF("[XLZ] processAllPendingXLZ() done, extracted=%u\n", count);
+  DEBUG_PRINTF("[XLZ] processAllPendingXLZ() done, count=%u\n", count);
   return count;
 }
