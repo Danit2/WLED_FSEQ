@@ -654,12 +654,12 @@ public:
             unsigned long duration = millis() - uploadStartTime;
 			DEBUG_PRINTF("[FPP] Upload complete in %lu ms\n", duration);
 
-			if (uploadedFile.endsWith(".xlz") || uploadedFile.endsWith(".XLZ")) {
+			if (currentUploadFile.endsWith(".xlz") || currentUploadFile.endsWith(".XLZ")) {
 				String outFile;
-				if (XLZUnzip::unpackAndDelete(uploadedFile, &outFile)) {
+				if (XLZUnzip::unpackAndDelete(currentUploadFile, &outFile)) {
 					DEBUG_PRINTF("[FPP] XLZ unpacked to: %s\n", outFile.c_str());
 				} else {
-					DEBUG_PRINTF("[FPP] Failed to unpack XLZ: %s\n", uploadedFile.c_str());
+					DEBUG_PRINTF("[FPP] Failed to unpack XLZ: %s\n", currentUploadFile.c_str());
 				}
 			}
 
