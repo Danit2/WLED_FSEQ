@@ -463,15 +463,15 @@ private:
     DEBUG_PRINTF("[FPP] Seconds Elapsed: %.2f\n", secondsElapsed);
 
     switch (action) {
-    case 0:
+    case 0: // SYNC_PKT_START
       FSEQPlayer::loadRecording(fileName.c_str(), 0, strip.getLength(),
                                 secondsElapsed);
       break;
-    case 1:
+    case 1: // SYNC_PKT_STOP
       FSEQPlayer::clearLastPlayback();
       realtimeLock(10, REALTIME_MODE_INACTIVE);
       break;
-    case 2:
+    case 2: // SYNC_PKT_SYNC
       DEBUG_PRINTLN(F("[FPP] ProcessSyncPacket: Sync command received"));
       DEBUG_PRINTF("[FPP] Sync Packet - FileName: %s, Seconds Elapsed: %.2f\n",
                    fileName.c_str(), secondsElapsed);
@@ -483,7 +483,7 @@ private:
         FSEQPlayer::syncPlayback(secondsElapsed);
       }
       break;
-    case 3:
+    case 3: // SYNC_PKT_OPEN
       DEBUG_PRINTLN(F(
           "[FPP] Open command received – metadata request (not implemented)"));
       break;
