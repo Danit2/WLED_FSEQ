@@ -20,10 +20,16 @@ FSEQPlayer::PlaybackState FSEQPlayer::segmentStates[MAX_NUM_SEGMENTS];
 namespace {
 constexpr uint16_t FSEQ_MAX_INDEXED_FILES = 128;
 constexpr uint32_t FSEQ_FPP_OVERRIDE_TIMEOUT_MS = 3000;
+constexpr size_t FSEQ_SHARED_FRAME_BUFFER_SIZE = 512;
+
 String gIndexedFseqFiles[FSEQ_MAX_INDEXED_FILES];
 uint16_t gIndexedFseqFileCount = 0;
 uint32_t gFppLastControlMs = 0;
 bool gFppOverrideActive = false;
+
+// Shared read buffer to avoid large stack allocations.
+// Rendering is done sequentially in the main loop, so one shared buffer is fine.
+static uint8_t gFseqFrameBuffer[FSEQ_SHARED_FRAME_BUFFER_SIZE];
 
 bool isFseqFileName(const String &name) {
   return name.endsWith(".fseq") || name.endsWith(".FSEQ");
@@ -174,19 +180,28 @@ void FSEQPlayer::processFrameDataForSegment(PlaybackState &state, Segment &segme
   uint32_t packetLength = state.file_header.channel_count;
   uint16_t segLen = segment.length();
   uint16_t maxLeds = min((uint32_t)segLen, packetLength / 3U);
-  uint8_t frame_data[128];
   uint32_t bytes_remaining = packetLength;
   uint16_t index = 0;
 
   while (index < maxLeds && bytes_remaining > 0) {
-    uint16_t length = (uint16_t)min(bytes_remaining, (uint32_t)sizeof(frame_data));
-    size_t bytesRead = state.recordingFile.read(frame_data, length);
-    if (bytesRead == 0) break;
+    uint16_t length = (uint16_t)min(bytes_remaining, (uint32_t)FSEQ_SHARED_FRAME_BUFFER_SIZE);
+    size_t bytesRead = state.recordingFile.read(gFseqFrameBuffer, length);
+
+    if (bytesRead == 0) {
+      DEBUG_PRINTLN("[FSEQ] SD read failed in segment playback, stopping state");
+      clearPlaybackState(state);
+      return;
+    }
+
     bytes_remaining -= bytesRead;
 
     for (uint16_t offset = 0; offset + 2 < bytesRead; offset += 3) {
-      segment.setPixelColor(index,
-          RGBW32(frame_data[offset], frame_data[offset + 1], frame_data[offset + 2], 0));
+      segment.setPixelColor(
+          index,
+          RGBW32(gFseqFrameBuffer[offset],
+                 gFseqFrameBuffer[offset + 1],
+                 gFseqFrameBuffer[offset + 2],
+                 0));
       if (++index >= maxLeds) break;
     }
   }
@@ -202,18 +217,27 @@ void FSEQPlayer::processFrameDataRealtime(PlaybackState &state) {
   uint32_t packetLength = state.file_header.channel_count;
   uint16_t totalLen = strip.getLengthTotal();
   uint16_t maxLeds = min((uint32_t)totalLen, packetLength / 3U);
-  uint8_t frame_data[128];
   uint32_t bytes_remaining = packetLength;
   uint16_t index = 0;
 
   while (index < maxLeds && bytes_remaining > 0) {
-    uint16_t length = (uint16_t)min(bytes_remaining, (uint32_t)sizeof(frame_data));
-    size_t bytesRead = state.recordingFile.read(frame_data, length);
-    if (bytesRead == 0) break;
+    uint16_t length = (uint16_t)min(bytes_remaining, (uint32_t)FSEQ_SHARED_FRAME_BUFFER_SIZE);
+    size_t bytesRead = state.recordingFile.read(gFseqFrameBuffer, length);
+
+    if (bytesRead == 0) {
+      DEBUG_PRINTLN("[FSEQ] SD read failed in realtime playback, stopping state");
+      clearPlaybackState(state);
+      return;
+    }
+
     bytes_remaining -= bytesRead;
 
     for (uint16_t offset = 0; offset + 2 < bytesRead; offset += 3) {
-      setRealtimePixel(index, frame_data[offset], frame_data[offset + 1], frame_data[offset + 2], 0);
+      setRealtimePixel(index,
+                       gFseqFrameBuffer[offset],
+                       gFseqFrameBuffer[offset + 1],
+                       gFseqFrameBuffer[offset + 2],
+                       0);
       if (++index >= maxLeds) break;
     }
   }
