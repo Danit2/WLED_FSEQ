@@ -185,17 +185,18 @@ void FSEQPlayer::processFrameDataForSegment(PlaybackState &state, Segment &segme
 
   while (index < maxLeds && bytes_remaining > 0) {
     uint16_t length = (uint16_t)min(bytes_remaining, (uint32_t)FSEQ_SHARED_FRAME_BUFFER_SIZE);
-    size_t bytesRead = state.recordingFile.read(gFseqFrameBuffer, length);
 
-    if (bytesRead == 0) {
-      DEBUG_PRINTLN("[FSEQ] SD read failed in segment playback, stopping state");
+    size_t bytesRead = state.recordingFile.readBytes((char*)gFseqFrameBuffer, length);
+    if (bytesRead != length) {
+      DEBUG_PRINTF("[FSEQ] Short SD read in segment playback (%u/%u), stopping state\n",
+                   (unsigned)bytesRead, (unsigned)length);
       clearPlaybackState(state);
       return;
     }
 
-    bytes_remaining -= bytesRead;
+    bytes_remaining -= length;
 
-    for (uint16_t offset = 0; offset + 2 < bytesRead; offset += 3) {
+    for (uint16_t offset = 0; offset + 2 < length; offset += 3) {
       segment.setPixelColor(
           index,
           RGBW32(gFseqFrameBuffer[offset],
@@ -222,17 +223,18 @@ void FSEQPlayer::processFrameDataRealtime(PlaybackState &state) {
 
   while (index < maxLeds && bytes_remaining > 0) {
     uint16_t length = (uint16_t)min(bytes_remaining, (uint32_t)FSEQ_SHARED_FRAME_BUFFER_SIZE);
-    size_t bytesRead = state.recordingFile.read(gFseqFrameBuffer, length);
 
-    if (bytesRead == 0) {
-      DEBUG_PRINTLN("[FSEQ] SD read failed in realtime playback, stopping state");
+    size_t bytesRead = state.recordingFile.readBytes((char*)gFseqFrameBuffer, length);
+    if (bytesRead != length) {
+      DEBUG_PRINTF("[FSEQ] Short SD read in realtime playback (%u/%u), stopping state\n",
+                   (unsigned)bytesRead, (unsigned)length);
       clearPlaybackState(state);
       return;
     }
 
-    bytes_remaining -= bytesRead;
+    bytes_remaining -= length;
 
-    for (uint16_t offset = 0; offset + 2 < bytesRead; offset += 3) {
+    for (uint16_t offset = 0; offset + 2 < length; offset += 3) {
       setRealtimePixel(index,
                        gFseqFrameBuffer[offset],
                        gFseqFrameBuffer[offset + 1],
@@ -245,7 +247,7 @@ void FSEQPlayer::processFrameDataRealtime(PlaybackState &state) {
   for (uint16_t i = index; i < totalLen; i++) {
     setRealtimePixel(i, 0, 0, 0, 0);
   }
-
+  realtimeLock(3000, REALTIME_MODE_FSEQ);
   state.next_time = state.now + state.file_header.step_time;
 }
 
