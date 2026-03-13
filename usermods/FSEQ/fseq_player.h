@@ -30,6 +30,14 @@ public:
     uint8_t flags;
   };
 
+  static void loadRecordingForSegment(uint8_t segmentId, const char *filepath,
+                                      float secondsElapsed = 0.0f,
+                                      bool loop = false);
+  static void clearSegmentPlayback(uint8_t segmentId);
+  static void setSegmentLooping(uint8_t segmentId, bool loop);
+  static bool isSegmentPlaying(uint8_t segmentId);
+  static void renderSegmentFrame(uint8_t segmentId, Segment &segment);
+
   static void loadRecording(const char *filepath,
                             float secondsElapsed = 0.0f,
                             bool loop = false);
@@ -39,38 +47,53 @@ public:
   static void setLooping(bool loop);
   static String getFileName();
   static float getElapsedSeconds();
-
-  // Called from the WLED effect function – renders the current frame into
-  // the active SEGMENT using SEGMENT.setPixelColor().
-  static void renderFrameToSegment();
+  static void renderRealtimeFrame();
 
 private:
   FSEQPlayer() {}
 
+  struct PlaybackState {
+    File recordingFile;
+    String currentFileName = "";
+    float secondsElapsed = 0.0f;
+    int32_t recordingRepeats = RECORDING_REPEAT_DEFAULT;
+    uint32_t now = 0;
+    uint32_t next_time = 0;
+    uint32_t frame = 0;
+    FileHeader file_header = {{0,0,0,0},0,0,0,0,0,0,0,0};
+  };
+
   static const int FSEQ_DEFAULT_STEP_TIME = 50;
+  static PlaybackState realtimeState;
+  static PlaybackState segmentStates[MAX_NUM_SEGMENTS];
 
-  static File recordingFile;
-  static String currentFileName;
-  static float secondsElapsed;
-  static uint8_t colorChannels;
-  static int32_t recordingRepeats;
-  static uint32_t now;
-  static uint32_t next_time;
-  static uint32_t frame;
-  static uint16_t buffer_size;
-  static FileHeader file_header;
-
-  static inline uint32_t readUInt32();
-  static inline uint32_t readUInt24();
-  static inline uint16_t readUInt16();
-  static inline uint8_t readUInt8();
+  static inline uint32_t readUInt32(File &file);
+  static inline uint32_t readUInt24(File &file);
+  static inline uint16_t readUInt16(File &file);
+  static inline uint8_t readUInt8(File &file);
 
   static bool fileOnSD(const char *filepath);
   static bool fileOnFS(const char *filepath);
-  static void printHeaderInfo();
-  static void processFrameData();
-  static bool stopBecauseAtTheEnd();
-  static void playNextRecordingFrame();
+  static void printHeaderInfo(const PlaybackState &state);
+  static void processFrameDataForSegment(PlaybackState &state, Segment &segment);
+  static void processFrameDataRealtime(PlaybackState &state);
+  static bool stopBecauseAtTheEnd(PlaybackState &state);
+  static void playNextRecordingFrameForSegment(PlaybackState &state, Segment &segment);
+  static void playNextRealtimeFrame(PlaybackState &state);
+  static void loadRecordingIntoState(PlaybackState &state, const char *filepath,
+                                     float secondsElapsed, bool loop);
+  static void clearPlaybackState(PlaybackState &state);
+  static bool isStatePlaying(const PlaybackState &state);
+  static void setStateLooping(PlaybackState &state, bool loop);
+  static float getElapsedSeconds(const PlaybackState &state);
 };
+
+uint16_t FSEQ_refreshFileIndexCache();
+uint16_t FSEQ_getFileIndexCount();
+bool FSEQ_getFileNameByIndex(uint16_t index, String &outName);
+int16_t FSEQ_findFileIndexByName(const String &name);
+void FSEQ_markFppControlActivity();
+void FSEQ_clearFppOverride();
+bool FSEQ_isFppOverrideActive();
 
 #endif // FSEQ_PLAYER_H

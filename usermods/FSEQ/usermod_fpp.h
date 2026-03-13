@@ -1,6 +1,6 @@
 #pragma once
 
-#include "usermod_fseq.h" // Contains FSEQ playback logic and getter methods for pins
+#include "usermod_fseq.h"
 #include "xlz_unzip.h"
 #include "wled.h"
 
@@ -20,9 +20,6 @@ void FSEQ_markFppControlActivity();
 void FSEQ_clearFppOverride();
 bool FSEQ_isFppOverrideActive();
 
-
-// ----- Minimal WriteBufferingStream Implementation -----
-// This class buffers data before writing it to an underlying Stream.
 class WriteBufferingStream : public Stream {
 public:
   WriteBufferingStream(Stream &upstream, size_t capacity)
@@ -36,10 +33,8 @@ public:
   }
   ~WriteBufferingStream() {
     flush();
-    if (_buffer)
-      free(_buffer);
+    if (_buffer) free(_buffer);
   }
-  // Write a block of data to the buffer
   size_t write(const uint8_t *buffer, size_t size) override {
     if (!_buffer) return 0;
     size_t total = 0;
@@ -51,14 +46,11 @@ public:
       buffer += toCopy;
       size -= toCopy;
       total += toCopy;
-      if (_offset == _capacity)
-        flush();
+      if (_offset == _capacity) flush();
     }
     return total;
   }
-  // Write a single byte
   size_t write(uint8_t b) override { return write(&b, 1); }
-  // Flush the buffer to the upstream stream
   void flush() override {
     if (_offset > 0) {
       _upstream.write(_buffer, _offset);
@@ -76,86 +68,61 @@ private:
   size_t _capacity = 0;
   size_t _offset = 0;
 };
-// ----- End WriteBufferingStream -----
 
 #define FILE_UPLOAD_BUFFER_SIZE 8192
-
-// Definitions for UDP (FPP) synchronization
 #define CTRL_PKT_SYNC 1
 #define CTRL_PKT_PING 4
 #define CTRL_PKT_BLANK 3
-
-// UDP port for FPP discovery/synchronization
 inline constexpr uint16_t UDP_SYNC_PORT = 32320;
-
 inline unsigned long lastPingTime = 0;
 inline constexpr unsigned long pingInterval = 5000;
 
-// Structure for the synchronization packet
-// Using pragma pack to avoid any padding issues
-#pragma pack(push, 1)
-struct FPPMultiSyncPacket {
-  uint8_t header[4];     // e.g. "FPPD"
-  uint8_t packet_type;   // e.g. CTRL_PKT_SYNC
-  uint16_t data_len;     // data length
-  uint8_t sync_action;   // action: start, stop, sync, open, etc.
-  uint8_t sync_type;     // sync type, e.g. 0 for FSEQ
-  uint32_t frame_number; // current frame number
-  float seconds_elapsed; // elapsed seconds
-  char filename[64];     // name of the file to play
-  uint8_t raw[128];      // raw packet data
-};
-#pragma pack(pop)
-
-// UsermodFPP class: Implements FPP (FSEQ/UDP) functionality
 class UsermodFPP : public Usermod {
 private:
-  AsyncUDP udp;            // UDP object for FPP discovery/sync
-  bool udpStarted = false; // Flag to indicate UDP listener status
-  const IPAddress multicastAddr =
-      IPAddress(239, 70, 80, 80);         // Multicast address
-  const uint16_t udpPort = UDP_SYNC_PORT; // UDP port
+  AsyncUDP udp;
+  bool udpStarted = false;
+  const IPAddress multicastAddr = IPAddress(239, 70, 80, 80);
+  const uint16_t udpPort = UDP_SYNC_PORT;
 
-  // Variables for FSEQ file upload
   File currentUploadFile;
   String currentUploadFileName = "";
   unsigned long uploadStartTime = 0;
   WriteBufferingStream *uploadStream = nullptr;
 
-  // Deferred XLZ handling
-  bool xlzChecked = false;                 // startup scan done
-  unsigned long xlzStartTime = 0;          // startup timer
-  bool uploadSessionActive = false;        // any recent upload activity
-  bool xlzPendingScan = false;             // .xlz uploaded and waiting for idle timeout
-  bool xlzProcessing = false;              // guard against re-entry
-  unsigned long lastUploadActivity = 0;    // updated on every chunk
-  unsigned long lastUploadFinished = 0;    // updated when a file finishes
+  bool xlzChecked = false;
+  unsigned long xlzStartTime = 0;
+  bool uploadSessionActive = false;
+  bool xlzPendingScan = false;
+  bool xlzProcessing = false;
+  unsigned long lastUploadActivity = 0;
+  unsigned long lastUploadFinished = 0;
 
-  bool savedLocalStateValid = false;
-  uint8_t savedMode = 0;
-  uint8_t savedSpeed = 0;
-  uint8_t savedIntensity = 0;
-  bool savedLoop = false;
+  enum PendingCommandType : uint8_t {
+    PENDING_NONE = 0,
+    PENDING_START,
+    PENDING_STOP,
+    PENDING_SYNC,
+    PENDING_BLANK
+  };
 
-  // Returns device name from server description
+  portMUX_TYPE fppMux = portMUX_INITIALIZER_UNLOCKED;
+  volatile PendingCommandType pendingCommand = PENDING_NONE;
+  char pendingFileName[65] = {0};
+  float pendingSecondsElapsed = 0.0f;
+
   String getDeviceName() { return String(serverDescription); }
 
-  // Build JSON with system information
   String buildSystemInfoJSON() {
     DynamicJsonDocument doc(1024);
-
     String devName = getDeviceName();
-
     String id = "WLED-" + WiFi.macAddress();
     id.replace(":", "");
-
     doc["HostName"] = id;
     doc["HostDescription"] = devName;
     doc["Platform"] = "ESP32";
     doc["Variant"] = "WLED";
     doc["Mode"] = "remote";
     doc["Version"] = versionString;
-
     uint16_t major = 0, minor = 0;
     String ver = versionString;
     int dashPos = ver.indexOf('-');
@@ -167,34 +134,24 @@ private:
     } else {
       major = ver.toInt();
     }
-
     doc["majorVersion"] = major;
     doc["minorVersion"] = minor;
     doc["typeId"] = 195;
     doc["UUID"] = WiFi.macAddress();
     doc["zip"] = true;
-
     JsonObject utilization = doc.createNestedObject("Utilization");
     utilization["MemoryFree"] = ESP.getFreeHeap();
     utilization["Uptime"] = millis();
-
     doc["rssi"] = WiFi.RSSI();
-
     JsonArray ips = doc.createNestedArray("IPS");
     ips.add(WiFi.localIP().toString());
-
     String json;
-    if (doc.overflowed()) {
-      DEBUG_PRINTLN(F("[FPP] JSON overflow in buildSystemInfoJSON"));
-    }
     serializeJson(doc, json);
     return json;
   }
 
-  // Build JSON with system status
   String buildSystemStatusJSON() {
     DynamicJsonDocument doc(2048);
-
     JsonObject mqtt = doc.createNestedObject("MQTT");
     mqtt["configured"] = false;
     mqtt["connected"] = false;
@@ -215,22 +172,18 @@ private:
       String fileName = FSEQPlayer::getFileName();
       float elapsedF = FSEQPlayer::getElapsedSeconds();
       uint32_t elapsed = (uint32_t)elapsedF;
-
       doc["current_sequence"] = fileName;
       doc["playlist"] = "";
       doc["seconds_elapsed"] = String(elapsed);
       doc["seconds_played"] = String(elapsed);
       doc["seconds_remaining"] = "0";
       doc["sequence_filename"] = fileName;
-
       uint32_t mins = elapsed / 60;
       uint32_t secs = elapsed % 60;
       char timeStr[16];
       snprintf(timeStr, sizeof(timeStr), "%02u:%02u", mins, secs);
-
       doc["time_elapsed"] = timeStr;
       doc["time_remaining"] = "00:00";
-
       doc["status"] = 1;
       doc["status_name"] = "playing";
       doc["mode"] = 8;
@@ -251,71 +204,49 @@ private:
     }
 
     JsonObject adv = doc.createNestedObject("advancedView");
-
     String devName = getDeviceName();
-
     String id = "WLED-" + WiFi.macAddress();
     id.replace(":", "");
-
     adv["HostName"] = id;
     adv["HostDescription"] = devName;
     adv["Platform"] = "WLED";
     adv["Variant"] = "ESP32";
     adv["Mode"] = "remote";
     adv["Version"] = versionString;
-
     uint16_t major = 0;
     uint16_t minor = 0;
-
     String ver = versionString;
     int dashPos = ver.indexOf('-');
-    if (dashPos > 0) {
-      ver = ver.substring(0, dashPos);
-    }
-
+    if (dashPos > 0) ver = ver.substring(0, dashPos);
     int dotPos = ver.indexOf('.');
     if (dotPos > 0) {
       major = ver.substring(0, dotPos).toInt();
       minor = ver.substring(dotPos + 1).toInt();
     } else {
       major = ver.toInt();
-      minor = 0;
     }
-
     adv["majorVersion"] = major;
     adv["minorVersion"] = minor;
     adv["typeId"] = 195;
     adv["UUID"] = WiFi.macAddress();
-
     JsonObject util = adv.createNestedObject("Utilization");
     util["MemoryFree"] = ESP.getFreeHeap();
     util["Uptime"] = millis();
-
     adv["rssi"] = WiFi.RSSI();
-
     JsonArray ips = adv.createNestedArray("IPS");
     ips.add(WiFi.localIP().toString());
-
     String json;
-    if (doc.overflowed()) {
-      DEBUG_PRINTLN(F("[FPP] JSON overflow in buildSystemInfoJSON"));
-    }
     serializeJson(doc, json);
     return json;
   }
 
-  // Build JSON for FPP multi-sync systems
   String buildFppdMultiSyncSystemsJSON() {
     DynamicJsonDocument doc(1024);
-
     JsonArray systems = doc.createNestedArray("systems");
     JsonObject sys = systems.createNestedObject();
-
     String devName = getDeviceName();
-
     String id = "WLED-" + WiFi.macAddress();
     id.replace(":", "");
-
     sys["hostname"] = devName;
     sys["id"] = id;
     sys["ip"] = WiFi.localIP().toString();
@@ -326,368 +257,228 @@ private:
     sys["NumPixelPort"] = 1;
     sys["NumSerialPort"] = 0;
     sys["mode"] = "remote";
-
     String json;
-    if (doc.overflowed()) {
-      DEBUG_PRINTLN(F("[FPP] JSON overflow in buildSystemInfoJSON"));
-    }
     serializeJson(doc, json);
     return json;
   }
 
-  // UDP - send a ping packet
   void sendPingPacket(IPAddress destination = IPAddress(255, 255, 255, 255)) {
     uint8_t buf[301];
     memset(buf, 0, sizeof(buf));
-
-    buf[0] = 'F';
-    buf[1] = 'P';
-    buf[2] = 'P';
-    buf[3] = 'D';
-
+    buf[0] = 'F'; buf[1] = 'P'; buf[2] = 'P'; buf[3] = 'D';
     buf[4] = 0x04;
-
     uint16_t dataLen = 294;
     buf[5] = dataLen & 0xFF;
     buf[6] = (dataLen >> 8) & 0xFF;
-
     buf[7] = 0x03;
     buf[8] = 0x00;
-
     buf[9] = 0xC3;
-
-    uint16_t versionMajor = 0;
-    uint16_t versionMinor = 0;
-
+    uint16_t versionMajor = 0, versionMinor = 0;
     String ver = versionString;
-
     int dashPos = ver.indexOf('-');
-    if (dashPos > 0) {
-      ver = ver.substring(0, dashPos);
-    }
-
+    if (dashPos > 0) ver = ver.substring(0, dashPos);
     int dotPos = ver.indexOf('.');
     if (dotPos > 0) {
       versionMajor = ver.substring(0, dotPos).toInt();
       versionMinor = ver.substring(dotPos + 1).toInt();
     }
-
     buf[10] = (versionMajor >> 8) & 0xFF;
     buf[11] = versionMajor & 0xFF;
     buf[12] = (versionMinor >> 8) & 0xFF;
     buf[13] = versionMinor & 0xFF;
-
     buf[14] = 0x08;
-
     IPAddress ip = WiFi.localIP();
-    buf[15] = ip[0];
-    buf[16] = ip[1];
-    buf[17] = ip[2];
-    buf[18] = ip[3];
-
+    buf[15] = ip[0]; buf[16] = ip[1]; buf[17] = ip[2]; buf[18] = ip[3];
     String id = "WLED-" + WiFi.macAddress();
     id.replace(":", "");
-
-    if (id.length() > 64)
-      id = id.substring(0, 64);
-
-    for (int i = 0; i < 64; i++) {
-      buf[19 + i] = (i < id.length()) ? id[i] : 0;
-    }
-
+    if (id.length() > 64) id = id.substring(0, 64);
+    for (int i = 0; i < 64; i++) buf[19 + i] = (i < id.length()) ? id[i] : 0;
     String verStr = versionString;
-    for (int i = 0; i < 40; i++) {
-      buf[84 + i] = (i < verStr.length()) ? verStr[i] : 0;
-    }
-
+    for (int i = 0; i < 40; i++) buf[84 + i] = (i < verStr.length()) ? verStr[i] : 0;
     String hwType = "WLED";
-    for (int i = 0; i < 40; i++) {
-      buf[125 + i] = (i < hwType.length()) ? hwType[i] : 0;
-    }
-
-    String channelRanges = "";
-    for (int i = 0; i < 120; i++) {
-      buf[166 + i] = (i < channelRanges.length()) ? channelRanges[i] : 0;
-    }
-
+    for (int i = 0; i < 40; i++) buf[125 + i] = (i < hwType.length()) ? hwType[i] : 0;
+    for (int i = 0; i < 120; i++) buf[166 + i] = 0;
     udp.writeTo(buf, sizeof(buf), destination, udpPort);
   }
 
-  // UDP - process received packet
+  void queuePendingCommand(PendingCommandType cmd, const String &fileName = "", float seconds = 0.0f) {
+    portENTER_CRITICAL(&fppMux);
+    pendingCommand = cmd;
+    pendingSecondsElapsed = seconds;
+    memset(pendingFileName, 0, sizeof(pendingFileName));
+    if (fileName.length() > 0) {
+      String tmp = fileName;
+      if (tmp.length() > 64) tmp = tmp.substring(0, 64);
+      memcpy(pendingFileName, tmp.c_str(), tmp.length());
+    }
+    portEXIT_CRITICAL(&fppMux);
+  }
+
   void processUdpPacket(AsyncUDPPacket packet) {
-    if (packet.length() < 5)
-      return;
+    if (packet.length() < 5) return;
     if (packet.data()[0] != 'F' || packet.data()[1] != 'P' ||
-        packet.data()[2] != 'P' || packet.data()[3] != 'D')
-      return;
+        packet.data()[2] != 'P' || packet.data()[3] != 'D') return;
 
     uint8_t packetType = packet.data()[4];
     switch (packetType) {
     case CTRL_PKT_SYNC: {
       const size_t baseSize = 17;
-
       if (packet.length() <= baseSize) {
         DEBUG_PRINTLN(F("[FPP] Sync packet too short, ignoring"));
         break;
       }
-
       uint8_t syncAction = packet.data()[7];
-      uint32_t frameNumber = 0;
       float secondsElapsed = 0.0f;
-      memcpy(&frameNumber, packet.data() + 9, sizeof(frameNumber));
       memcpy(&secondsElapsed, packet.data() + 13, sizeof(secondsElapsed));
-
-      DEBUG_PRINTLN(F("[FPP] Received UDP sync packet"));
-      DEBUG_PRINTF("[FPP] Sync Packet - Action: %d\n", syncAction);
-      DEBUG_PRINTF("[FPP] Frame Number: %lu\n", frameNumber);
-      DEBUG_PRINTF("[FPP] Seconds Elapsed: %.2f\n", secondsElapsed);
-
       size_t filenameOffset = 17;
-      size_t maxFilenameLen =
-          min((size_t)64, packet.length() - filenameOffset);
-
+      size_t maxFilenameLen = min((size_t)64, packet.length() - filenameOffset);
       char safeFilename[65];
       memcpy(safeFilename, packet.data() + filenameOffset, maxFilenameLen);
       safeFilename[maxFilenameLen] = '\0';
-
-      DEBUG_PRINT(F("[FPP] Filename: "));
-      DEBUG_PRINTLN(safeFilename);
-
-      ProcessSyncPacket(syncAction, String(safeFilename), secondsElapsed);
+      switch (syncAction) {
+        case 0: queuePendingCommand(PENDING_START, String(safeFilename), secondsElapsed); break;
+        case 1: queuePendingCommand(PENDING_STOP); break;
+        case 2: queuePendingCommand(PENDING_SYNC, String(safeFilename), secondsElapsed); break;
+        default: break;
+      }
       break;
     }
     case CTRL_PKT_PING:
-      DEBUG_PRINTLN(F("[FPP] Received UDP ping packet"));
       sendPingPacket(packet.remoteIP());
       break;
     case CTRL_PKT_BLANK:
-      DEBUG_PRINTLN(F("[FPP] Received UDP blank packet"));
-      stopFppOverride(true);
+      queuePendingCommand(PENDING_BLANK);
       break;
     default:
-      DEBUG_PRINTLN(F("[FPP] Unknown UDP packet type"));
       break;
     }
   }
 
-  void saveLocalMainSegmentState() {
-    Segment &seg = strip.getMainSegment();
-    savedMode = seg.mode;
-    savedSpeed = seg.speed;
-    savedIntensity = seg.intensity;
-    savedLoop = seg.check1;
-    savedLocalStateValid = true;
+  void startRealtimeFppPlayback(const String &fileName, float secondsElapsed) {
+    String normalized = fileName;
+    if (!normalized.startsWith("/")) normalized = "/" + normalized;
+
+    FSEQ_markFppControlActivity();
+    realtimeIP = Network.localIP();
+    useMainSegmentOnly = false;
+    realtimeLock(3000, REALTIME_MODE_FSEQ);
+    FSEQPlayer::loadRecording(normalized.c_str(), secondsElapsed, true);
+    FSEQPlayer::renderRealtimeFrame();
   }
 
-  void restoreLocalMainSegmentState() {
-    if (!savedLocalStateValid) return;
-
-    Segment &seg = strip.getMainSegment();
-    seg.setMode(savedMode);
-    seg.speed = savedSpeed;
-    seg.intensity = savedIntensity;
-    seg.check1 = savedLoop;
-    stateChanged = true;
-    savedLocalStateValid = false;
-  }
-
-  void activateFseqEffect(const String &fileName, bool loop = true) {
-    uint8_t fxId = UsermodFseq::fseqEffectId;
-    if (fxId == 0) return;
-
-    const int16_t fileIndex = FSEQ_findFileIndexByName(fileName);
-    if (fileIndex < 0) {
-      DEBUG_PRINTF("[FPP] File not found in FSEQ index list: %s\n", fileName.c_str());
-      return;
-    }
-
-    Segment &seg = strip.getMainSegment();
-
-    if (!savedLocalStateValid && !FSEQ_isFppOverrideActive()) {
-      saveLocalMainSegmentState();
-    }
-
-    seg.setMode(fxId);
-    seg.speed = (uint8_t)fileIndex;
-    seg.check1 = loop;
-    stateChanged = true;
-  }
-
-  void stopFppOverride(bool restoreLocalState) {
+  void stopRealtimeFppPlayback() {
     FSEQ_clearFppOverride();
     FSEQPlayer::clearLastPlayback();
-    if (restoreLocalState) restoreLocalMainSegmentState();
+    exitRealtime();
   }
 
-  // Process sync command with detailed debug output
-  void ProcessSyncPacket(uint8_t action, String fileName,
-                         float secondsElapsed) {
-    if (!fileName.startsWith("/")) {
-      fileName = "/" + fileName;
+  void processPendingFppCommand() {
+    PendingCommandType cmd;
+    char fileName[65];
+    float seconds;
+
+    portENTER_CRITICAL(&fppMux);
+    cmd = pendingCommand;
+    if (cmd == PENDING_NONE) {
+      portEXIT_CRITICAL(&fppMux);
+      return;
     }
+    pendingCommand = PENDING_NONE;
+    memcpy(fileName, pendingFileName, sizeof(fileName));
+    seconds = pendingSecondsElapsed;
+    portEXIT_CRITICAL(&fppMux);
 
-    DEBUG_PRINTLN(F("[FPP] ProcessSyncPacket: Sync command received"));
-    DEBUG_PRINTF("[FPP] Action: %d\n", action);
-    DEBUG_PRINT(F("[FPP] FileName: "));
-    DEBUG_PRINTLN(fileName);
-    DEBUG_PRINTF("[FPP] Seconds Elapsed: %.2f\n", secondsElapsed);
-
-    switch (action) {
-    case 0: // SYNC_PKT_START
-      FSEQ_refreshFileIndexCache();
-      activateFseqEffect(fileName, true);
-      FSEQ_markFppControlActivity();
-      FSEQPlayer::loadRecording(fileName.c_str(), secondsElapsed, true);
-      break;
-    case 1: // SYNC_PKT_STOP
-      stopFppOverride(true);
-      break;
-    case 2: // SYNC_PKT_SYNC
-      FSEQ_refreshFileIndexCache();
-      FSEQ_markFppControlActivity();
-      if (!FSEQPlayer::isPlaying() || !FSEQPlayer::getFileName().equalsIgnoreCase(fileName.startsWith("/") ? fileName.substring(1) : fileName)) {
-        DEBUG_PRINTLN(F("[FPP] Sync: Playback not active or file changed, starting playback."));
-        activateFseqEffect(fileName, true);
-        FSEQPlayer::loadRecording(fileName.c_str(), secondsElapsed, true);
-      } else {
-        activateFseqEffect(fileName, true);
-        FSEQPlayer::syncPlayback(secondsElapsed);
+    String fn = String(fileName);
+    switch (cmd) {
+      case PENDING_START:
+        FSEQ_refreshFileIndexCache();
+        startRealtimeFppPlayback(fn, seconds);
+        break;
+      case PENDING_STOP:
+      case PENDING_BLANK:
+        stopRealtimeFppPlayback();
+        break;
+      case PENDING_SYNC: {
+        FSEQ_refreshFileIndexCache();
+        String normalized = fn;
+        if (!normalized.startsWith("/")) normalized = "/" + normalized;
+        FSEQ_markFppControlActivity();
+        realtimeIP = Network.localIP();
+        useMainSegmentOnly = false;
+        realtimeLock(3000, REALTIME_MODE_FSEQ);
+        if (!FSEQPlayer::isPlaying() || !FSEQPlayer::getFileName().equalsIgnoreCase(normalized.substring(1))) {
+          startRealtimeFppPlayback(normalized, seconds);
+        } else {
+          FSEQPlayer::syncPlayback(seconds);
+        }
+        break;
       }
-      break;
-    case 3: // SYNC_PKT_OPEN
-      DEBUG_PRINTLN(F("[FPP] Open command received – metadata request (not implemented)"));
-      break;
-    default:
-      DEBUG_PRINTLN(F("[FPP] ProcessSyncPacket: Unknown sync action"));
-      break;
+      default:
+        break;
     }
   }
 
 public:
   static const char _name[];
 
-  // Setup function called once at startup
   void setup() {
     DEBUG_PRINTF("[%s] FPP Usermod loaded\n", _name);
+    server.on("/api/system/info", HTTP_GET, [this](AsyncWebServerRequest *request) {
+      request->send(200, "application/json", buildSystemInfoJSON());
+    });
+    server.on("/api/system/status", HTTP_GET, [this](AsyncWebServerRequest *request) {
+      request->send(200, "application/json", buildSystemStatusJSON());
+    });
+    server.on("/api/fppd/multiSyncSystems", HTTP_GET, [this](AsyncWebServerRequest *request) {
+      request->send(200, "application/json", buildFppdMultiSyncSystemsJSON());
+    });
 
-    // Register API endpoints
-    server.on("/api/system/info", HTTP_GET,
-              [this](AsyncWebServerRequest *request) {
-                String json = buildSystemInfoJSON();
-                request->send(200, "application/json", json);
-              });
-    server.on("/api/system/status", HTTP_GET,
-              [this](AsyncWebServerRequest *request) {
-                String json = buildSystemStatusJSON();
-                request->send(200, "application/json", json);
-              });
-    server.on("/api/fppd/multiSyncSystems", HTTP_GET,
-			  [this](AsyncWebServerRequest *request) {
-				String json = buildFppdMultiSyncSystemsJSON();
-				request->send(200, "application/json", json);
-			  });
-    // Other API endpoints as needed...
+    server.on("/fpp", HTTP_POST, [](AsyncWebServerRequest *request) {}, NULL,
+      [this](AsyncWebServerRequest *request, uint8_t *data, size_t len, size_t index, size_t total) {
+        uploadSessionActive = true;
+        lastUploadActivity = millis();
 
-    // Endpoint for file upload (raw, application/octet-stream)
-    server.on(
-        "/fpp", HTTP_POST,
-        [](AsyncWebServerRequest *request) {
-        },
-        NULL,
-        [this](AsyncWebServerRequest *request,
-               uint8_t *data, size_t len,
-               size_t index, size_t total) {
-
-          // mark upload session activity on every chunk
-          uploadSessionActive = true;
-          lastUploadActivity = millis();
-
-          DEBUG_PRINTF("[FPP] Chunk index=%u len=%u total=%u\n", index, len, total);
-
-          if (index == 0) {
-            if (uploadStream || currentUploadFile) {
-              request->send(409, "text/plain", "Upload already in progress");
-              return;
-            }
-
-            DEBUG_PRINTLN("[FPP] Starting file upload");
-
-            String fileParam = "";
-            if (request->hasParam("filename")) {
-              fileParam = request->arg("filename");
-            }
-
-            currentUploadFileName =
-                (fileParam != "")
-                    ? (fileParam.startsWith("/") ? fileParam : "/" + fileParam)
-                    : "/default.fseq";
-
-            DEBUG_PRINTF("[FPP] Using filename: %s\n",
-                         currentUploadFileName.c_str());
-
-            if (SD_ADAPTER.exists(currentUploadFileName.c_str())) {
-              SD_ADAPTER.remove(currentUploadFileName.c_str());
-            }
-
-            currentUploadFile =
-                SD_ADAPTER.open(currentUploadFileName.c_str(), FILE_WRITE);
-
-            if (!currentUploadFile) {
-              DEBUG_PRINTLN(F("[FPP] ERROR: Failed to open file"));
-              request->send(500, "text/plain", "File open failed");
-              return;
-            }
-
-            uploadStream = new WriteBufferingStream(
-                currentUploadFile, FILE_UPLOAD_BUFFER_SIZE);
-
-            uploadStartTime = millis();
+        if (index == 0) {
+          if (uploadStream || currentUploadFile) {
+            request->send(409, "text/plain", "Upload already in progress");
+            return;
           }
+          String fileParam = "";
+          if (request->hasParam("filename")) fileParam = request->arg("filename");
+          currentUploadFileName = (fileParam != "") ? (fileParam.startsWith("/") ? fileParam : "/" + fileParam) : "/default.fseq";
+          if (SD_ADAPTER.exists(currentUploadFileName.c_str())) SD_ADAPTER.remove(currentUploadFileName.c_str());
+          currentUploadFile = SD_ADAPTER.open(currentUploadFileName.c_str(), FILE_WRITE);
+          if (!currentUploadFile) {
+            request->send(500, "text/plain", "File open failed");
+            return;
+          }
+          uploadStream = new WriteBufferingStream(currentUploadFile, FILE_UPLOAD_BUFFER_SIZE);
+          uploadStartTime = millis();
+        }
 
+        if (uploadStream) uploadStream->write(data, len);
+
+        if (index + len == total) {
           if (uploadStream) {
-            uploadStream->write(data, len);
+            uploadStream->flush();
+            delete uploadStream;
+            uploadStream = nullptr;
           }
+          String uploadedFile = currentUploadFileName;
+          if (currentUploadFile) currentUploadFile.close();
+          String lowerName = uploadedFile;
+          lowerName.toLowerCase();
+          if (lowerName.endsWith(".xlz")) xlzPendingScan = true;
+          lastUploadFinished = millis();
+          lastUploadActivity = lastUploadFinished;
+          currentUploadFileName = "";
+          request->send(200, "text/plain", "Upload complete");
+        }
+      });
 
-          if (index + len == total) {
-            DEBUG_PRINTLN("[FPP] Upload finished");
-
-            if (uploadStream) {
-              uploadStream->flush();
-              delete uploadStream;
-              uploadStream = nullptr;
-            }
-
-            String uploadedFile = currentUploadFileName;
-
-            if (currentUploadFile) {
-              currentUploadFile.close();
-            }
-
-            unsigned long duration = millis() - uploadStartTime;
-            DEBUG_PRINTF("[FPP] Upload complete in %lu ms\n", duration);
-
-            String lowerName = uploadedFile;
-            lowerName.toLowerCase();
-
-            if (lowerName.endsWith(".xlz")) {
-              xlzPendingScan = true;
-              DEBUG_PRINTF("[XLZ] Deferred unpack scheduled for: %s\n",
-                           uploadedFile.c_str());
-            }
-
-            lastUploadFinished = millis();
-            lastUploadActivity = lastUploadFinished;
-
-            currentUploadFileName = "";
-            request->send(200, "text/plain", "Upload complete");
-          }
-        });
-
-    // Endpoint to list FSEQ files on SD card
     server.on("/fseqfilelist", HTTP_GET, [](AsyncWebServerRequest *request) {
       DynamicJsonDocument doc(1024);
       JsonArray files = doc.createNestedArray("files");
-
       File root = SD_ADAPTER.open("/");
       if (root && root.isDirectory()) {
         File file = root.openNextFile();
@@ -704,75 +495,56 @@ public:
       } else {
         doc["error"] = "Cannot open SD root directory";
       }
-
       String json;
       serializeJson(doc, json);
       request->send(200, "application/json", json);
     });
 
-
-    // Initialize UDP listener for synchronization and ping
     if (!udpStarted && (WiFi.status() == WL_CONNECTED)) {
       if (udp.listenMulticast(multicastAddr, udpPort)) {
         udpStarted = true;
-        udp.onPacket(
-            [this](AsyncUDPPacket packet) { processUdpPacket(packet); });
-        DEBUG_PRINTLN(F("[FPP] UDP listener started on multicast"));
+        udp.onPacket([this](AsyncUDPPacket packet) { processUdpPacket(packet); });
       }
     }
   }
 
-  // Main loop function
   void loop() {
     if (!udpStarted && (WiFi.status() == WL_CONNECTED)) {
       if (udp.listenMulticast(multicastAddr, udpPort)) {
         udpStarted = true;
         udp.onPacket([this](AsyncUDPPacket packet) { processUdpPacket(packet); });
-        DEBUG_PRINTLN(F("[FPP] UDP listener started on multicast"));
       }
     }
 
-    if (savedLocalStateValid && !FSEQ_isFppOverrideActive()) {
-      restoreLocalMainSegmentState();
+    processPendingFppCommand();
+
+    if (FSEQ_isFppOverrideActive()) {
+      realtimeIP = Network.localIP();
+      realtimeLock(3000, REALTIME_MODE_FSEQ);
+      FSEQPlayer::renderRealtimeFrame();
+    } else if (realtimeMode == REALTIME_MODE_FSEQ && FSEQPlayer::isPlaying()) {
+      stopRealtimeFppPlayback();
     }
 
-    // startup scan after reboot
-    if (xlzStartTime == 0) {
-      xlzStartTime = millis();
-      DEBUG_PRINTF("[XLZ] start timer at %lu\n", xlzStartTime);
-    }
-
+    if (xlzStartTime == 0) xlzStartTime = millis();
     if (!xlzChecked && (millis() - xlzStartTime >= 2000)) {
       xlzChecked = true;
-
-      DEBUG_PRINTF("[XLZ] 2s reached, starting startup scan at %lu\n", millis());
-
       File root = SD_ADAPTER.open("/");
-      if (!root || !root.isDirectory()) {
-        DEBUG_PRINTLN("[XLZ] SD root not accessible, skipping startup scan");
-        if (root) root.close();
-      } else {
+      if (root && root.isDirectory()) {
         root.close();
-        DEBUG_PRINTLN("[XLZ] SD ready -> startup scanning");
         XLZUnzip::processAllPendingXLZ();
-        DEBUG_PRINTLN("[XLZ] startup scan finished");
+      } else if (root) {
+        root.close();
       }
     }
 
-    // deferred XLZ processing after upload inactivity
     if (uploadSessionActive && xlzPendingScan && !xlzProcessing) {
       if (millis() - lastUploadActivity >= 10000) {
-        DEBUG_PRINTF("[XLZ] upload idle for 10s -> processing pending XLZ at %lu\n",
-                     millis());
-
         xlzProcessing = true;
         XLZUnzip::processAllPendingXLZ();
         xlzProcessing = false;
-
         xlzPendingScan = false;
         uploadSessionActive = false;
-
-        DEBUG_PRINTLN("[XLZ] deferred upload scan finished");
       }
     }
   }
