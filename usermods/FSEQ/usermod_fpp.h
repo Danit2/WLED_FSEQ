@@ -4,12 +4,7 @@
 #include "xlz_unzip.h"
 #include "wled.h"
 
-#ifdef WLED_USE_SD_SPI
-#include <SD.h>
-#include <SPI.h>
-#elif defined(WLED_USE_SD_MMC)
-#include "SD_MMC.h"
-#endif
+#include "sd_adapter_compat.h"
 
 #include <AsyncUDP.h>
 #include <ESPAsyncWebServer.h>
@@ -78,12 +73,6 @@ private:
 #define CTRL_PKT_PING 4
 #define CTRL_PKT_BLANK 3
 
-// UDP port for FPP discovery/synchronization
-inline constexpr uint16_t UDP_SYNC_PORT = 32320;
-
-inline unsigned long lastPingTime = 0;
-inline constexpr unsigned long pingInterval = 5000;
-
 // Structure for the synchronization packet
 // Using pragma pack to avoid any padding issues
 #pragma pack(push, 1)
@@ -107,7 +96,7 @@ private:
   bool udpStarted = false; // Flag to indicate UDP listener status
   const IPAddress multicastAddr =
       IPAddress(239, 70, 80, 80);         // Multicast address
-  const uint16_t udpPort = UDP_SYNC_PORT; // UDP port
+  const uint16_t udpPort = 32320; // UDP port
 
   // Variables for FSEQ file upload
   File currentUploadFile;
@@ -503,7 +492,7 @@ private:
   }
 
 public:
-  static const char _name[];
+  static constexpr const char _name[] PROGMEM = "FPP Connect";
 
   // Setup function called once at startup
   void setup() {
@@ -735,5 +724,3 @@ public:
   void addToConfig(JsonObject &root) override {}
   bool readFromConfig(JsonObject &root) override { return true; }
 };
-
-inline const char UsermodFPP::_name[] PROGMEM = "FPP Connect";
