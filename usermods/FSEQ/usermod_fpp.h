@@ -475,7 +475,7 @@ private:
     savedMode = seg.mode;
     savedSpeed = seg.speed;
     savedIntensity = seg.intensity;
-    savedLoop = seg.check1;
+    savedLoop = seg.check2;
     savedLocalStateValid = true;
   }
 
@@ -486,7 +486,7 @@ private:
     seg.setMode(savedMode);
     seg.speed = savedSpeed;
     seg.intensity = savedIntensity;
-    seg.check1 = savedLoop;
+    seg.check2 = savedLoop;
     stateChanged = true;
     savedLocalStateValid = false;
   }
@@ -509,7 +509,7 @@ private:
 
     seg.setMode(fxId);
     seg.speed = (uint8_t)fileIndex;
-    seg.check1 = loop;
+    seg.check2 = loop;
     stateChanged = true;
   }
 
