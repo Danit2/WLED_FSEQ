@@ -26,9 +26,9 @@ public:
   };
 
   static void loadRecording(const char *filepath,
-                            uint16_t startLed,
-                            uint16_t stopLed,
-                            float secondsElapsed = 0.0f,
+                            uint16_t startLed = uint16_t(-1),
+                            uint16_t stopLed = uint16_t(-1),
+                            float startSecondsElapsed = 0.0f,
                             bool loop = false);
   static void handlePlayRecording();
   static void clearLastPlayback();

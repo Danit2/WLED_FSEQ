@@ -148,9 +148,11 @@ void FSEQPlayer::handlePlayRecording() {
 void FSEQPlayer::loadRecording(const char *filepath,
                                uint16_t startLed,
                                uint16_t stopLed,
-                               float secondsElapsed,
+                               float startSecondsElapsed,
                                bool loop)
 {
+  FSEQPlayer::secondsElapsed = startSecondsElapsed;
+
   if (recordingFile.available()) {
     clearLastPlayback();
   }
@@ -171,7 +173,7 @@ void FSEQPlayer::loadRecording(const char *filepath,
       currentFileName = currentFileName.substring(1);
   } else if (fileOnFS(filepath)) {
     DEBUG_PRINTF("Read file from FS: %s\n", filepath);
-	recordingFile = WLED_FS.open(filepath, "rb");
+    recordingFile = WLED_FS.open(filepath, "rb");
     currentFileName = String(filepath);
     if (currentFileName.startsWith("/"))
       currentFileName = currentFileName.substring(1);
@@ -220,17 +222,16 @@ void FSEQPlayer::loadRecording(const char *filepath,
   if (realtimeOverride == REALTIME_OVERRIDE_ONCE) {
     realtimeOverride = REALTIME_OVERRIDE_NONE;
   }
-  frame = (uint32_t)((secondsElapsed * 1000.0f) / file_header.step_time);
+  frame = (uint32_t)((startSecondsElapsed * 1000.0f) / file_header.step_time);
   if (frame >= file_header.frame_count) {
     frame = file_header.frame_count - 1;
   }
-  // Set loop mode if secondsElapsed is exactly 1.0f
+
   recordingRepeats = loop
     ? RECORDING_REPEAT_LOOP
     : RECORDING_REPEAT_DEFAULT;
-	
+
   playNextRecordingFrame();
-  //playNextRecordingFrame();
 }
 
 void FSEQPlayer::clearLastPlayback() {
