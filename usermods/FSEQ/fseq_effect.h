@@ -3,43 +3,59 @@
 #include "wled.h"
 #include "fseq_player.h"
 
-//
-// FSEQ Player effect – renders FSEQ frame data into the active SEGMENT.
-//
-// File selection follows the same pattern as the built-in Image effect:
-// set the **segment name** to the .fseq filename on the SD card
-// (e.g. "show.fseq").  The effect prepends "/" and opens the file.
-//
-// Check1 enables loop mode (repeat the sequence forever).
-//
+// Helper functions implemented in fseq_player.cpp
+uint16_t FSEQ_refreshFileIndexCache();
+bool FSEQ_getFileNameByIndex(uint16_t index, String &outName);
+bool FSEQ_isFppOverrideActive();
 
-// Stored per-effect so we can detect when the segment name changes.
-static char _fseq_lastName[WLED_MAX_SEGNAME_LEN + 2] = "";
+// Global playback is intentionally single-instance. These values are used to
+// detect when the locally selected file/loop setting changed.
+static uint16_t _fseq_lastIndex = 0xFFFF;
+static bool _fseq_lastLoop = false;
+static uint16_t _fseq_lastFileCount = 0xFFFF;
 
 static void mode_fseq_player(void) {
-  // Build the target filename from the segment name
-  const char *segName = SEGMENT.name;
-
-  // No name set – show static colour
-  if (!segName || segName[0] == '\0') {
-    if (FSEQPlayer::isPlaying()) FSEQPlayer::clearLastPlayback();
-    SEGMENT.fill(SEGCOLOR(0));
+  // FPP has priority while its override is active. Keep rendering the
+  // currently loaded sequence, but do not let the local effect selection take
+  // over until the override expires or is cleared.
+  if (FSEQ_isFppOverrideActive()) {
+    if (FSEQPlayer::isPlaying()) {
+      FSEQPlayer::renderFrameToSegment();
+    } else {
+      SEGMENT.fill(SEGCOLOR(0));
+    }
     return;
   }
 
-  // Detect segment-name change → (re)load the file
-  if (strncmp(_fseq_lastName, segName, WLED_MAX_SEGNAME_LEN) != 0) {
-    strncpy(_fseq_lastName, segName, WLED_MAX_SEGNAME_LEN);
-    _fseq_lastName[WLED_MAX_SEGNAME_LEN] = '\0';
+  const uint16_t fileCount = FSEQ_refreshFileIndexCache();
+  const uint16_t selectedIndex = SEGMENT.speed;
+  const bool loop = SEGMENT.check1;
 
-    // Build "/<name>" path
-    char path[WLED_MAX_SEGNAME_LEN + 2];
-    path[0] = '/';
-    strncpy(path + 1, segName, WLED_MAX_SEGNAME_LEN);
-    path[WLED_MAX_SEGNAME_LEN + 1] = '\0';
+  if (fileCount == 0 || selectedIndex >= fileCount) {
+    if (FSEQPlayer::isPlaying()) FSEQPlayer::clearLastPlayback();
+    SEGMENT.fill(SEGCOLOR(0));
+    _fseq_lastIndex = selectedIndex;
+    _fseq_lastLoop = loop;
+    _fseq_lastFileCount = fileCount;
+    return;
+  }
 
-    bool loop = SEGMENT.check1;
-    FSEQPlayer::loadRecording(path, 0.0f, loop);
+  const bool selectionChanged =
+      (_fseq_lastIndex != selectedIndex) ||
+      (_fseq_lastLoop != loop) ||
+      (_fseq_lastFileCount != fileCount);
+
+  if (selectionChanged || !FSEQPlayer::isPlaying()) {
+    String fileName;
+    if (FSEQ_getFileNameByIndex(selectedIndex, fileName) && fileName.length() > 0) {
+      char path[256];
+      fileName.toCharArray(path, sizeof(path));
+      FSEQPlayer::loadRecording(path, 0.0f, loop);
+    }
+
+    _fseq_lastIndex = selectedIndex;
+    _fseq_lastLoop = loop;
+    _fseq_lastFileCount = fileCount;
   }
 
   if (!FSEQPlayer::isPlaying()) {
@@ -47,13 +63,10 @@ static void mode_fseq_player(void) {
     return;
   }
 
-  // Keep loop state in sync with the UI checkbox
-  FSEQPlayer::setLooping(SEGMENT.check1);
-
-  // Render the current frame into the segment
+  FSEQPlayer::setLooping(loop);
   FSEQPlayer::renderFrameToSegment();
 }
 
+// Use the standard speed slider as the FSEQ file index and check1 as loop.
 static const char _data_FX_MODE_FSEQ_PLAYER[] PROGMEM =
-    "FSEQ Player@,,,,,Loop;;!;1";
-
+    "FSEQ Player@Index,,,,,Loop;;!;1";

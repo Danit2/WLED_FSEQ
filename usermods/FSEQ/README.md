@@ -1,133 +1,357 @@
-# ✨ Usermod FSEQ ✨
+# ✨ FSEQ Player Usermod for WLED
 
-> **Originally created by: Andrej Chrcek**
+> Original concept based on work by **Andrej Chrcek**  
+> Extended and redesigned for improved **WLED**, **SD card**, and **FPP** integration.
 
-Welcome to the **Usermod FSEQ** project!  
-This module extends your WLED setup by enabling FSEQ file playback from an SD card, including a web UI and UDP remote control. It combines creativity with functionality to enhance your lighting experience.
+This usermod adds support for playing **FSEQ animation files** directly from an **SD card** in WLED.
+
+It provides:
+
+- a dedicated **FSEQ Player** effect
+- a **Web UI** for browsing files on the SD card
+- support for **WLED presets** and **boot presets**
+- **FPP override support**, so an external FPP controller can take priority over local playback
 
 ---
 
-# FSEQ Web UI
+# Features
 
-Access the interface via:
+## FSEQ Player effect
 
-http://yourIP/fsequi
+A new effect called **FSEQ Player** is added to WLED.
 
-or over the WLED Infotab
+The effect uses:
+
+- **Speed slider** → selects the **FSEQ file index**
+- **Checkbox 1** → enables **Loop playback**
+
+This means you can select a file by its index and optionally enable looping.
+
+---
+
+## Automatic FSEQ file indexing
+
+All `.fseq` files on the SD card are scanned automatically.
+
+Files are:
+
+- filtered by extension
+- sorted **alphabetically**
+- assigned an **index number**
+
+Example:
+
+| Index | File |
+|------:|------|
+| 0 | `01-snow.fseq` |
+| 1 | `02-christmas.fseq` |
+| 2 | `03-candycane.fseq` |
+
+The selected index is used by the **FSEQ Player** effect.
+
+---
+
+# Web UI
+
+Open the interface:
+
+```
+http://<WLED-IP>/fsequi
+```
 
 <img width="792" height="206" alt="image" src="https://github.com/user-attachments/assets/e58693ec-afe8-4c28-8343-5b3382cd10ef" />
 
----
-
-# SD & FSEQ Usermod for WLED
-
-This usermod adds support for playing FSEQ files from an SD card and provides a web interface for managing SD files and controlling FSEQ playback via HTTP and UDP.
-
-The usermod exposes several HTTP endpoints for file management and playback control.
+The page contains two file sections.
 
 ---
 
-## Features
+## 1️⃣ FSEQ files
 
-- **FSEQ Playback** – Play FSEQ files from an SD card.
-- **Web UI** – Manage SD files (list, upload, delete) and control playback.
-- **UDP Synchronization** – Remote control via UDP packets.
-- **Configurable SPI Pins** – SPI pin assignments can be configured via WLED’s Usermods settings (JSON).
+All `.fseq` files found on the SD card are listed together with their index.
 
----
+Example:
 
-## Installation
-
-### Configure PlatformIO
-
-Add the following to your `platformio_override.ini` (or `platformio.ini`):
-
-```ini
-[env:esp32dev_V4]
-custom_usermods = 
-  FSEQ 
-  sd_card
+```
+0 - 01-snow.fseq
+1 - 02-christmas.fseq
+2 - 03-candycane.fseq
 ```
 
-You must add the sd_card usermod also to use the FSEQ usermod.
+These numbers correspond directly to the **effect index slider**.
 
 ---
 
-### Storage Configuration
+## 2️⃣ Other files
 
-- If you use **SD over SPI**, you must manually set the build flag:  
-  `-D WLED_USE_SD_SPI`  
+All non-FSEQ files are listed in a separate section below.
 
-- If you use **SD via MMC**, you must manually set the build flag:  
-  `-D WLED_USE_SD_MMC`
+This keeps animation files easy to find while still allowing normal SD card browsing.
 
 ---
 
-## Available Endpoints
+## 3️⃣ Instructions
 
-### SD Management
-
-GET /fsequi  
-Returns the main HTML interface for the SD & FSEQ Manager.
-
-GET /api/sd/list  
-Displays an HTML page listing all files on the SD card, including options to delete files and upload new ones.
-
-POST /api/sd/upload  
-Handles file uploads using multipart/form-data.
-
-POST /api/sd/delete
-Deletes the specified file from the SD card.  
-Example: /api/sd/delete 
-body: file=example.fseq
+At the bottom of the page a short explanation is shown describing how the system works.
 
 ---
 
-### FSEQ Control
+# Usage
 
-GET /api/fseq/list  
-Returns an HTML page listing all .fseq and .FSEQ files found on the SD card. Each file includes a play button.
+## Playing a FSEQ file
 
-POST /api/fseq/start
-body: file=animation.fseq  
-Starts playback of the selected FSEQ file.  
+1. Select effect **FSEQ Player**
+2. Set the **speed slider** to the desired index
+3. Enable **Checkbox 1** if you want the file to loop
 
-POST /api/fseq/startloop
-body: file=animation.fseq  
-Starts playback of the selected FSEQ file in loop mode.  
+Example:
 
-POST /api/fseq/stop  
-Stops the current FSEQ playback and clears the active session.
+| Setting | Value |
+|--------|------|
+| Effect | `FSEQ Player` |
+| Index | `0` |
+| Loop | enabled |
 
----
+This will play:
 
-### FPP Control
-
-GET /api/system/info
-Returns a JSON list of the system info
-
-GET /api/system/status
-Returns a JSON list of the system status
-
-GET /api/fppd/multiSyncSystems
-Returns a JSON list of the multisyncinfos
-
-POST /fpp
-Endpoint for file upload from xLights (raw, application/octet-stream)
-
-GET /fseqfilelist
-Endpoint to list FSEQ files on SD card for FPP Player
-
-GET /fpp/connect
-Endpoint to start FSEQ playback from FPP Player
-
-GET /fpp/stop
-Endpoint to stop FSEQ playback
+```
+01-snow.fseq
+```
 
 ---
 
-## Summary
+# Preset Support
 
-The SD & FSEQ Usermod for WLED enables FSEQ playback from an SD card with a full-featured web interface and UDP synchronization. 
+The FSEQ Player works with normal **WLED presets**.
 
-For further customization or support, please refer to the project documentation or open an issue on GitHub.
+Presets store:
+
+- selected effect
+- index value
+- loop state
+- segment configuration
+
+Example preset setup:
+
+| Preset | Segment 1 | Segment 2 |
+|--------|-----------|-----------|
+| Snow/Christmas | `01-snow.fseq` | `02-christmas.fseq` |
+
+---
+
+# Boot Playback
+
+To automatically start an animation after boot:
+
+1. configure the FSEQ Player effect
+2. save the setup as a preset
+3. assign the preset as **Boot preset**
+
+Location in WLED:
+
+```
+Config → LED Preferences → Boot preset
+```
+
+After reboot the animation will start automatically.
+
+---
+
+# Multi-Segment Support
+
+Each segment can run its own FSEQ animation.
+
+Example:
+
+| Segment | Effect | Index | File |
+|--------|--------|------:|------|
+| Segment 1 | FSEQ Player | 0 | `01-snow.fseq` |
+| Segment 2 | FSEQ Player | 1 | `02-christmas.fseq` |
+
+This configuration can be stored as a preset.
+
+---
+
+# FPP Integration
+
+This usermod supports **FPP (Falcon Player)** remote control.
+
+When an FPP controller sends commands:
+
+- FPP playback **overrides the local effect**
+- WLED switches to **FPP controlled playback**
+
+When FPP stops sending commands:
+
+- WLED automatically returns to the previous local state
+
+This allows WLED to behave as a lightweight **FPP Player device**.
+
+---
+
+# Recommended File Naming
+
+Because file selection is **index based**, file order matters.
+
+Files are sorted alphabetically.
+
+Recommended naming style:
+
+```
+01-snow.fseq
+02-christmas.fseq
+03-candycane.fseq
+10-finale.fseq
+```
+
+This keeps the index order stable.
+
+---
+
+# Important Note
+
+If you:
+
+- rename files
+- add files between existing names
+- delete files
+
+the index order may change.
+
+If this happens, presets referencing those indices may need to be updated.
+
+---
+
+# Requirements
+
+- **ESP32**
+- **WLED**
+- **SD card**
+- **sd_card usermod enabled**
+
+Supported storage modes:
+
+- SD SPI
+- SD MMC
+
+---
+
+# Example Workflow
+
+## Play animation locally
+
+1. Upload `.fseq` files to the SD card
+2. Open `/fsequi`
+3. Check the file list and index
+4. Select effect **FSEQ Player**
+5. Set the index slider
+6. Enable loop if needed
+7. Save as preset if desired
+
+---
+
+## Start animation on boot
+
+1. Configure the effect
+2. Save preset
+3. Set preset as boot preset
+
+---
+
+## Use WLED with FPP
+
+1. Store `.fseq` files on the SD card
+2. Allow FPP to send play/sync commands
+3. While FPP is active it overrides local playback
+4. When FPP stops the local preset resumes
+
+---
+
+# Web UI Structure
+
+The Web UI contains three parts:
+
+1. **FSEQ file list**
+2. **Other SD files**
+3. **Usage instructions**
+
+This keeps the interface clean and easy to understand.
+
+---
+
+# Troubleshooting
+
+### Wrong file plays
+
+The file index may have changed.
+
+Check `/fsequi` and adjust the preset.
+
+---
+
+### Preset loads wrong animation
+
+File order may have changed.
+
+Use numbered filenames and recreate the preset.
+
+---
+
+### Nothing plays
+
+Check:
+
+- SD card mounted
+- `.fseq` files exist
+- correct index selected
+- file listed in `/fsequi`
+
+---
+
+### Loop not working
+
+Make sure **Checkbox 1** is enabled in the effect settings.
+
+---
+
+# Limitations
+
+- File selection is **index based**
+- Index order depends on **alphabetical sorting**
+- Changing the file list can change preset behavior
+
+---
+
+# Credits
+
+Original concept and work by:
+
+**Andrej Chrcek**
+
+Further development and redesign for improved WLED integration.
+
+---
+
+# Suggested Naming Convention
+
+```
+01-snow.fseq
+02-christmas.fseq
+03-candycane.fseq
+04-mega-tree.fseq
+05-finale.fseq
+```
+
+This keeps file indices predictable.
+
+---
+
+# Summary
+
+This usermod allows WLED to:
+
+- play `.fseq` files directly from SD
+- select animations by index using the **FSEQ Player effect**
+- display indexed files in a dedicated Web UI
+- store playback in **presets**
+- start animations automatically via **boot preset**
+- allow **FPP override** for remote control

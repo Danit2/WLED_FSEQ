@@ -14,6 +14,13 @@
 #include <AsyncUDP.h>
 #include <ESPAsyncWebServer.h>
 
+uint16_t FSEQ_refreshFileIndexCache();
+int16_t FSEQ_findFileIndexByName(const String &name);
+void FSEQ_markFppControlActivity();
+void FSEQ_clearFppOverride();
+bool FSEQ_isFppOverrideActive();
+
+
 // ----- Minimal WriteBufferingStream Implementation -----
 // This class buffers data before writing it to an underlying Stream.
 class WriteBufferingStream : public Stream {
@@ -123,6 +130,12 @@ private:
   bool xlzProcessing = false;              // guard against re-entry
   unsigned long lastUploadActivity = 0;    // updated on every chunk
   unsigned long lastUploadFinished = 0;    // updated when a file finishes
+
+  bool savedLocalStateValid = false;
+  uint8_t savedMode = 0;
+  uint8_t savedSpeed = 0;
+  uint8_t savedIntensity = 0;
+  bool savedLoop = false;
 
   // Returns device name from server description
   String getDeviceName() { return String(serverDescription); }
@@ -449,7 +462,7 @@ private:
       break;
     case CTRL_PKT_BLANK:
       DEBUG_PRINTLN(F("[FPP] Received UDP blank packet"));
-      FSEQPlayer::clearLastPlayback();
+      stopFppOverride(true);
       break;
     default:
       DEBUG_PRINTLN(F("[FPP] Unknown UDP packet type"));
@@ -457,29 +470,58 @@ private:
     }
   }
 
-  // Switch the main segment to the FSEQ Player effect and set its name
-  // to the given filename so the effect knows which file to play.
-  void activateFseqEffect(const String &fileName) {
-    uint8_t fxId = UsermodFseq::fseqEffectId;
-    if (fxId == 0) return; // effect not registered
+  void saveLocalMainSegmentState() {
+    Segment &seg = strip.getMainSegment();
+    savedMode = seg.mode;
+    savedSpeed = seg.speed;
+    savedIntensity = seg.intensity;
+    savedLoop = seg.check1;
+    savedLocalStateValid = true;
+  }
+
+  void restoreLocalMainSegmentState() {
+    if (!savedLocalStateValid) return;
 
     Segment &seg = strip.getMainSegment();
-    // Strip leading '/' for the segment name (effect prepends it)
-    const char *nameStr = fileName.c_str();
-    if (nameStr[0] == '/') nameStr++;
-    seg.setName(nameStr);
+    seg.setMode(savedMode);
+    seg.speed = savedSpeed;
+    seg.intensity = savedIntensity;
+    seg.check1 = savedLoop;
+    stateChanged = true;
+    savedLocalStateValid = false;
+  }
 
-    if (seg.mode != fxId) {
-      seg.setMode(fxId);
-      seg.check1 = true; // enable looping for sync playback
-      stateChanged = true;
+  void activateFseqEffect(const String &fileName, bool loop = true) {
+    uint8_t fxId = UsermodFseq::fseqEffectId;
+    if (fxId == 0) return;
+
+    const int16_t fileIndex = FSEQ_findFileIndexByName(fileName);
+    if (fileIndex < 0) {
+      DEBUG_PRINTF("[FPP] File not found in FSEQ index list: %s\n", fileName.c_str());
+      return;
     }
+
+    Segment &seg = strip.getMainSegment();
+
+    if (!savedLocalStateValid && !FSEQ_isFppOverrideActive()) {
+      saveLocalMainSegmentState();
+    }
+
+    seg.setMode(fxId);
+    seg.speed = (uint8_t)fileIndex;
+    seg.check1 = loop;
+    stateChanged = true;
+  }
+
+  void stopFppOverride(bool restoreLocalState) {
+    FSEQ_clearFppOverride();
+    FSEQPlayer::clearLastPlayback();
+    if (restoreLocalState) restoreLocalMainSegmentState();
   }
 
   // Process sync command with detailed debug output
   void ProcessSyncPacket(uint8_t action, String fileName,
                          float secondsElapsed) {
-    // Ensure the filename is absolute
     if (!fileName.startsWith("/")) {
       fileName = "/" + fileName;
     }
@@ -492,24 +534,28 @@ private:
 
     switch (action) {
     case 0: // SYNC_PKT_START
-      activateFseqEffect(fileName);
-      FSEQPlayer::loadRecording(fileName.c_str(), secondsElapsed);
+      FSEQ_refreshFileIndexCache();
+      activateFseqEffect(fileName, true);
+      FSEQ_markFppControlActivity();
+      FSEQPlayer::loadRecording(fileName.c_str(), secondsElapsed, true);
       break;
     case 1: // SYNC_PKT_STOP
-      FSEQPlayer::clearLastPlayback();
+      stopFppOverride(true);
       break;
     case 2: // SYNC_PKT_SYNC
-      if (!FSEQPlayer::isPlaying()) {
-        DEBUG_PRINTLN(F("[FPP] Sync: Playback not active, starting playback."));
-        activateFseqEffect(fileName);
-        FSEQPlayer::loadRecording(fileName.c_str(), secondsElapsed);
+      FSEQ_refreshFileIndexCache();
+      FSEQ_markFppControlActivity();
+      if (!FSEQPlayer::isPlaying() || !FSEQPlayer::getFileName().equalsIgnoreCase(fileName.startsWith("/") ? fileName.substring(1) : fileName)) {
+        DEBUG_PRINTLN(F("[FPP] Sync: Playback not active or file changed, starting playback."));
+        activateFseqEffect(fileName, true);
+        FSEQPlayer::loadRecording(fileName.c_str(), secondsElapsed, true);
       } else {
+        activateFseqEffect(fileName, true);
         FSEQPlayer::syncPlayback(secondsElapsed);
       }
       break;
     case 3: // SYNC_PKT_OPEN
-      DEBUG_PRINTLN(F(
-          "[FPP] Open command received – metadata request (not implemented)"));
+      DEBUG_PRINTLN(F("[FPP] Open command received – metadata request (not implemented)"));
       break;
     default:
       DEBUG_PRINTLN(F("[FPP] ProcessSyncPacket: Unknown sync action"));
@@ -692,6 +738,10 @@ public:
         udp.onPacket([this](AsyncUDPPacket packet) { processUdpPacket(packet); });
         DEBUG_PRINTLN(F("[FPP] UDP listener started on multicast"));
       }
+    }
+
+    if (savedLocalStateValid && !FSEQ_isFppOverrideActive()) {
+      restoreLocalMainSegmentState();
     }
 
     // startup scan after reboot
