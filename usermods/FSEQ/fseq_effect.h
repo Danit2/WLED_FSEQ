@@ -28,7 +28,7 @@ static void mode_fseq_player(void) {
   }
 
   const uint16_t fileCount = FSEQ_refreshFileIndexCache();
-  const uint16_t selectedIndex = SEGMENT.speed;
+  const uint16_t selectedIndex = SEGMENT.custom1;
   const bool loop = SEGMENT.check1;
 
   if (fileCount == 0 || selectedIndex >= fileCount) {
@@ -67,6 +67,6 @@ static void mode_fseq_player(void) {
   FSEQPlayer::renderFrameToSegment();
 }
 
-// Use the standard speed slider as the FSEQ file index and check1 as loop.
+// Use a custom slider as the FSEQ file index and check1 as loop.
 static const char _data_FX_MODE_FSEQ_PLAYER[] PROGMEM =
-    "FSEQ Player@Index,,,,,Loop;;!;1";
+    "FSEQ Player@,,File,,,Loop,,;;;1;c1=0";
