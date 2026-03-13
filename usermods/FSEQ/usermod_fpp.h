@@ -1,7 +1,7 @@
 #pragma once
 
 #include "usermod_fseq.h" // Contains FSEQ playback logic and getter methods for pins
-#include "xlz_unzip.h"					  
+#include "xlz_unzip.h"
 #include "wled.h"
 
 #ifdef WLED_USE_SD_SPI
@@ -184,7 +184,7 @@ private:
     ips.add(WiFi.localIP().toString());
 
     String json;
-	if (doc.overflowed()) {
+    if (doc.overflowed()) {
       DEBUG_PRINTLN(F("[FPP] JSON overflow in buildSystemInfoJSON"));
     }
     serializeJson(doc, json);
@@ -297,7 +297,7 @@ private:
     ips.add(WiFi.localIP().toString());
 
     String json;
-	if (doc.overflowed()) {
+    if (doc.overflowed()) {
       DEBUG_PRINTLN(F("[FPP] JSON overflow in buildSystemInfoJSON"));
     }
     serializeJson(doc, json);
@@ -328,7 +328,7 @@ private:
     sys["mode"] = "remote";
 
     String json;
-	if (doc.overflowed()) {
+    if (doc.overflowed()) {
       DEBUG_PRINTLN(F("[FPP] JSON overflow in buildSystemInfoJSON"));
     }
     serializeJson(doc, json);
@@ -475,7 +475,7 @@ private:
     savedMode = seg.mode;
     savedSpeed = seg.speed;
     savedIntensity = seg.intensity;
-    savedLoop = seg.check2;
+    savedLoop = seg.check1;
     savedLocalStateValid = true;
   }
 
@@ -486,7 +486,7 @@ private:
     seg.setMode(savedMode);
     seg.speed = savedSpeed;
     seg.intensity = savedIntensity;
-    seg.check2 = savedLoop;
+    seg.check1 = savedLoop;
     stateChanged = true;
     savedLocalStateValid = false;
   }
@@ -509,7 +509,7 @@ private:
 
     seg.setMode(fxId);
     seg.speed = (uint8_t)fileIndex;
-    seg.check2 = loop;
+    seg.check1 = loop;
     stateChanged = true;
   }
 
@@ -598,14 +598,9 @@ public:
                uint8_t *data, size_t len,
                size_t index, size_t total) {
 
-						  
-																				  
-
           // mark upload session activity on every chunk
           uploadSessionActive = true;
           lastUploadActivity = millis();
-					   
-			 
 
           DEBUG_PRINTF("[FPP] Chunk index=%u len=%u total=%u\n", index, len, total);
 
@@ -613,12 +608,9 @@ public:
             if (uploadStream || currentUploadFile) {
               request->send(409, "text/plain", "Upload already in progress");
               return;
-									   
             }
 
             DEBUG_PRINTLN("[FPP] Starting file upload");
-										  
-			 
 
             String fileParam = "";
             if (request->hasParam("filename")) {
