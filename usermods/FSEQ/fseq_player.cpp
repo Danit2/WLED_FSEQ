@@ -174,7 +174,7 @@ void FSEQPlayer::processFrameDataForSegment(PlaybackState &state, Segment &segme
   uint32_t packetLength = state.file_header.channel_count;
   uint16_t segLen = segment.length();
   uint16_t maxLeds = min((uint32_t)segLen, packetLength / 3U);
-  uint8_t frame_data[512];
+  uint8_t frame_data[128];
   uint32_t bytes_remaining = packetLength;
   uint16_t index = 0;
 
@@ -202,7 +202,7 @@ void FSEQPlayer::processFrameDataRealtime(PlaybackState &state) {
   uint32_t packetLength = state.file_header.channel_count;
   uint16_t totalLen = strip.getLengthTotal();
   uint16_t maxLeds = min((uint32_t)totalLen, packetLength / 3U);
-  uint8_t frame_data[512];
+  uint8_t frame_data[128];
   uint32_t bytes_remaining = packetLength;
   uint16_t index = 0;
 
