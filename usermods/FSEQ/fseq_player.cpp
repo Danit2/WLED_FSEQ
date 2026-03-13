@@ -367,7 +367,7 @@ void FSEQPlayer::clearPlaybackState(PlaybackState &state) {
 
 bool FSEQPlayer::isStatePlaying(const PlaybackState &state) {
   return state.recordingFile && state.file_header.frame_count > 0 &&
-         state.frame < state.file_header.frame_count;
+         state.frame <= state.file_header.frame_count;
 }
 
 void FSEQPlayer::setStateLooping(PlaybackState &state, bool loop) {
