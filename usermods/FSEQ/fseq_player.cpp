@@ -355,9 +355,12 @@ void FSEQPlayer::loadRecordingIntoState(PlaybackState &state, const char *filepa
 void FSEQPlayer::clearPlaybackState(PlaybackState &state) {
   state.frame = 0;
   state.next_time = 0;
+  state.now = 0;
   state.secondsElapsed = 0;
+  state.recordingRepeats = RECORDING_REPEAT_DEFAULT;
   state.file_header.frame_count = 0;
   state.file_header.channel_count = 0;
+  state.file_header.step_time = 0;
   if (state.recordingFile) state.recordingFile.close();
   state.currentFileName = "";
 }
