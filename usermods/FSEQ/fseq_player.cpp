@@ -477,7 +477,6 @@ void FSEQPlayer::syncPlayback(float secondsElapsed) {
     if (state.recordingFile.seek(offset)) {
       DEBUG_PRINTF("[FSEQ] HARD Sync -> frame=%lu (diff=%ld)\n",
                    (unsigned long)expectedFrame, (long)diff);
-      state.next_time = millis() + state.file_header.step_time;
     } else {
       DEBUG_PRINTLN("[FSEQ] HARD Sync failed to seek");
     }
