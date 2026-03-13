@@ -22,7 +22,7 @@ static void mode_fseq_player(void) {
     if (FSEQPlayer::isPlaying()) {
       FSEQPlayer::renderFrameToSegment();
     } else {
-      SEGMENT.fill(SEGCOLOR(0));
+      SEGMENT.fill(BLACK);
     }
     return;
   }
@@ -33,7 +33,7 @@ static void mode_fseq_player(void) {
 
   if (fileCount == 0 || selectedIndex >= fileCount) {
     if (FSEQPlayer::isPlaying()) FSEQPlayer::clearLastPlayback();
-    SEGMENT.fill(SEGCOLOR(0));
+    SEGMENT.fill(BLACK);
     _fseq_lastIndex = selectedIndex;
     _fseq_lastLoop = loop;
     _fseq_lastFileCount = fileCount;
@@ -63,7 +63,7 @@ static void mode_fseq_player(void) {
   }
 
   if (!FSEQPlayer::isPlaying()) {
-    SEGMENT.fill(SEGCOLOR(0));
+    SEGMENT.fill(BLACK);
     return;
   }
 
