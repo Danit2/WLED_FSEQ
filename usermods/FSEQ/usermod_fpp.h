@@ -73,16 +73,13 @@ private:
 #define CTRL_PKT_SYNC 1
 #define CTRL_PKT_PING 4
 #define CTRL_PKT_BLANK 3
-inline constexpr uint16_t UDP_SYNC_PORT = 32320;
-inline unsigned long lastPingTime = 0;
-inline constexpr unsigned long pingInterval = 5000;
 
 class UsermodFPP : public Usermod {
 private:
   AsyncUDP udp;
   bool udpStarted = false;
   const IPAddress multicastAddr = IPAddress(239, 70, 80, 80);
-  const uint16_t udpPort = UDP_SYNC_PORT;
+  const uint16_t udpPort = 32320;
 
   File currentUploadFile;
   String currentUploadFileName = "";
