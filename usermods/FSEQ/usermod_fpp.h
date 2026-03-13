@@ -106,6 +106,7 @@ private:
   volatile PendingCommandType pendingCommand = PENDING_NONE;
   char pendingFileName[65] = {0};
   float pendingSecondsElapsed = 0.0f;
+  IPAddress lastFppSenderIP = IPAddress(0, 0, 0, 0);
 
   String getDeviceName() { return String(serverDescription); }
 
@@ -298,10 +299,14 @@ private:
     udp.writeTo(buf, sizeof(buf), destination, udpPort);
   }
 
-  void queuePendingCommand(PendingCommandType cmd, const String &fileName = "", float seconds = 0.0f) {
+  void queuePendingCommand(PendingCommandType cmd,
+                           const String &fileName = "",
+                           float seconds = 0.0f,
+                           IPAddress senderIP = IPAddress(0, 0, 0, 0)) {
     portENTER_CRITICAL(&fppMux);
     pendingCommand = cmd;
     pendingSecondsElapsed = seconds;
+    lastFppSenderIP = senderIP;
     memset(pendingFileName, 0, sizeof(pendingFileName));
     if (fileName.length() > 0) {
       String tmp = fileName;
@@ -332,11 +337,19 @@ private:
       char safeFilename[65];
       memcpy(safeFilename, packet.data() + filenameOffset, maxFilenameLen);
       safeFilename[maxFilenameLen] = '\0';
+
       switch (syncAction) {
-        case 0: queuePendingCommand(PENDING_START, String(safeFilename), secondsElapsed); break;
-        case 1: queuePendingCommand(PENDING_STOP); break;
-        case 2: queuePendingCommand(PENDING_SYNC, String(safeFilename), secondsElapsed); break;
-        default: break;
+        case 0:
+          queuePendingCommand(PENDING_START, String(safeFilename), secondsElapsed, packet.remoteIP());
+          break;
+        case 1:
+          queuePendingCommand(PENDING_STOP);
+          break;
+        case 2:
+          queuePendingCommand(PENDING_SYNC, String(safeFilename), secondsElapsed, packet.remoteIP());
+          break;
+        default:
+          break;
       }
       break;
     }
@@ -356,7 +369,7 @@ private:
     if (!normalized.startsWith("/")) normalized = "/" + normalized;
 
     FSEQ_markFppControlActivity();
-    realtimeIP = Network.localIP();
+    realtimeIP = lastFppSenderIP;
     useMainSegmentOnly = false;
     realtimeLock(3000, REALTIME_MODE_FSEQ);
     FSEQPlayer::loadRecording(normalized.c_str(), secondsElapsed, true);
@@ -388,7 +401,6 @@ private:
     String fn = String(fileName);
     switch (cmd) {
       case PENDING_START:
-        FSEQ_refreshFileIndexCache();
         startRealtimeFppPlayback(fn, seconds);
         break;
       case PENDING_STOP:
@@ -396,7 +408,6 @@ private:
         stopRealtimeFppPlayback();
         break;
       case PENDING_SYNC: {
-        FSEQ_refreshFileIndexCache();
         String normalized = fn;
         if (!normalized.startsWith("/")) normalized = "/" + normalized;
         FSEQ_markFppControlActivity();
@@ -516,7 +527,7 @@ public:
     processPendingFppCommand();
 
     if (FSEQ_isFppOverrideActive()) {
-      realtimeIP = Network.localIP();
+      realtimeIP = lastFppSenderIP;
       realtimeLock(3000, REALTIME_MODE_FSEQ);
       FSEQPlayer::renderRealtimeFrame();
     } else if (realtimeMode == REALTIME_MODE_FSEQ && FSEQPlayer::isPlaying()) {
