@@ -2,10 +2,6 @@
 
 #include "wled.h"
 
-#if !defined(WLED_USE_SD_SPI) && !defined(WLED_USE_SD_MMC)
-  #error "FSEQ requires WLED_USE_SD_SPI or WLED_USE_SD_MMC."
-#endif
-
 #ifdef WLED_USE_SD_SPI
 #include <SD.h>
 #include <SPI.h>

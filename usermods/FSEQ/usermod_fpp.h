@@ -1,6 +1,7 @@
 #pragma once
 
 #include "usermod_fseq.h" // Contains FSEQ playback logic and getter methods for pins
+#include "xlz_unzip.h"					  
 #include "wled.h"
 
 #ifdef WLED_USE_SD_SPI
@@ -33,7 +34,7 @@ public:
   }
   // Write a block of data to the buffer
   size_t write(const uint8_t *buffer, size_t size) override {
-	if (!_buffer) return 0;
+    if (!_buffer) return 0;
     size_t total = 0;
     while (size > 0) {
       size_t space = _capacity - _offset;
@@ -114,6 +115,15 @@ private:
   unsigned long uploadStartTime = 0;
   WriteBufferingStream *uploadStream = nullptr;
 
+  // Deferred XLZ handling
+  bool xlzChecked = false;                 // startup scan done
+  unsigned long xlzStartTime = 0;          // startup timer
+  bool uploadSessionActive = false;        // any recent upload activity
+  bool xlzPendingScan = false;             // .xlz uploaded and waiting for idle timeout
+  bool xlzProcessing = false;              // guard against re-entry
+  unsigned long lastUploadActivity = 0;    // updated on every chunk
+  unsigned long lastUploadFinished = 0;    // updated when a file finishes
+
   // Returns device name from server description
   String getDeviceName() { return String(serverDescription); }
 
@@ -123,7 +133,7 @@ private:
 
     String devName = getDeviceName();
 
-	String id = "WLED-" + WiFi.macAddress();
+    String id = "WLED-" + WiFi.macAddress();
     id.replace(":", "");
 
     doc["HostName"] = id;
@@ -132,476 +142,307 @@ private:
     doc["Variant"] = "WLED";
     doc["Mode"] = "remote";
     doc["Version"] = versionString;
-    
-	uint16_t major = 0, minor = 0;
+
+    uint16_t major = 0, minor = 0;
     String ver = versionString;
     int dashPos = ver.indexOf('-');
     if (dashPos > 0) ver = ver.substring(0, dashPos);
     int dotPos = ver.indexOf('.');
-    if (dotPos > 0) { major = ver.substring(0, dotPos).toInt(); minor = ver.substring(dotPos + 1).toInt(); }
-    else { major = ver.toInt(); }
+    if (dotPos > 0) {
+      major = ver.substring(0, dotPos).toInt();
+      minor = ver.substring(dotPos + 1).toInt();
+    } else {
+      major = ver.toInt();
+    }
+
     doc["majorVersion"] = major;
     doc["minorVersion"] = minor;
-    doc["typeId"] = 251;
+    doc["typeId"] = 195;
     doc["UUID"] = WiFi.macAddress();
+    doc["zip"] = true;
 
     JsonObject utilization = doc.createNestedObject("Utilization");
     utilization["MemoryFree"] = ESP.getFreeHeap();
     utilization["Uptime"] = millis();
-    
+
     doc["rssi"] = WiFi.RSSI();
 
     JsonArray ips = doc.createNestedArray("IPS");
     ips.add(WiFi.localIP().toString());
 
     String json;
+	if (doc.overflowed()) {
+      DEBUG_PRINTLN(F("[FPP] JSON overflow in buildSystemInfoJSON"));
+    }
     serializeJson(doc, json);
     return json;
   }
 
-	// ======================================================================
-	// Build JSON directly into WLED /json/info root
-	// ======================================================================
+  // Build JSON with system status
+  String buildSystemStatusJSON() {
+    DynamicJsonDocument doc(2048);
 
-	void buildSystemStatusJSON_INFO(JsonObject& root)
-	{
-	  // --------------------------------------------------
-	  // MQTT
-	  // --------------------------------------------------
-	  JsonObject mqtt = root.createNestedObject("MQTT");
-	  mqtt["configured"] = false;
-	  mqtt["connected"] = false;
+    JsonObject mqtt = doc.createNestedObject("MQTT");
+    mqtt["configured"] = false;
+    mqtt["connected"] = false;
 
-	  // --------------------------------------------------
-	  // Playlist Info
-	  // --------------------------------------------------
-	  JsonObject currentPlaylist = root.createNestedObject("current_playlist");
-	  currentPlaylist["count"] = "0";
-	  currentPlaylist["description"] = "";
-	  currentPlaylist["index"] = "0";
-	  currentPlaylist["playlist"] = "";
-	  currentPlaylist["type"] = "";
+    JsonObject currentPlaylist = doc.createNestedObject("current_playlist");
+    currentPlaylist["count"] = "0";
+    currentPlaylist["description"] = "";
+    currentPlaylist["index"] = "0";
+    currentPlaylist["playlist"] = "";
+    currentPlaylist["type"] = "";
 
-	  // --------------------------------------------------
-	  // Basic Status
-	  // --------------------------------------------------
-	  root["volume"] = 70;
-	  root["media_filename"] = "";
-	  root["fppd"] = "running";
-	  root["current_song"] = "";
+    doc["volume"] = 70;
+    doc["media_filename"] = "";
+    doc["fppd"] = "running";
+    doc["current_song"] = "";
 
-	  if (FSEQPlayer::isPlaying()) {
+    if (FSEQPlayer::isPlaying()) {
+      String fileName = FSEQPlayer::getFileName();
+      float elapsedF = FSEQPlayer::getElapsedSeconds();
+      uint32_t elapsed = (uint32_t)elapsedF;
 
-		String fileName = FSEQPlayer::getFileName();
-		float elapsedF = FSEQPlayer::getElapsedSeconds();
-		uint32_t elapsed = (uint32_t)elapsedF;
+      doc["current_sequence"] = fileName;
+      doc["playlist"] = "";
+      doc["seconds_elapsed"] = String(elapsed);
+      doc["seconds_played"] = String(elapsed);
+      doc["seconds_remaining"] = "0";
+      doc["sequence_filename"] = fileName;
 
-		root["current_sequence"] = fileName;
-		root["playlist"] = "";
-		root["seconds_elapsed"] = String(elapsed);
-		root["seconds_played"] = String(elapsed);
-		root["seconds_remaining"] = "0";
-		root["sequence_filename"] = fileName;
+      uint32_t mins = elapsed / 60;
+      uint32_t secs = elapsed % 60;
+      char timeStr[16];
+      snprintf(timeStr, sizeof(timeStr), "%02u:%02u", mins, secs);
 
-		uint32_t mins = elapsed / 60;
-		uint32_t secs = elapsed % 60;
-		char timeStr[16];
-		snprintf(timeStr, sizeof(timeStr), "%02u:%02u", mins, secs);
+      doc["time_elapsed"] = timeStr;
+      doc["time_remaining"] = "00:00";
 
-		root["time_elapsed"] = timeStr;
-		root["time_remaining"] = "00:00";
+      doc["status"] = 1;
+      doc["status_name"] = "playing";
+      doc["mode"] = 8;
+      doc["mode_name"] = "remote";
+    } else {
+      doc["current_sequence"] = "";
+      doc["playlist"] = "";
+      doc["seconds_elapsed"] = "0";
+      doc["seconds_played"] = "0";
+      doc["seconds_remaining"] = "0";
+      doc["sequence_filename"] = "";
+      doc["time_elapsed"] = "00:00";
+      doc["time_remaining"] = "00:00";
+      doc["status"] = 0;
+      doc["status_name"] = "idle";
+      doc["mode"] = 8;
+      doc["mode_name"] = "remote";
+    }
 
-		root["status"] = 1;
-		root["status_name"] = "playing";
-		root["mode"] = 8;
-		root["mode_name"] = "remote";
+    JsonObject adv = doc.createNestedObject("advancedView");
 
-	  } else {
+    String devName = getDeviceName();
 
-		root["current_sequence"] = "";
-		root["playlist"] = "";
-		root["seconds_elapsed"] = "0";
-		root["seconds_played"] = "0";
-		root["seconds_remaining"] = "0";
-		root["sequence_filename"] = "";
-		root["time_elapsed"] = "00:00";
-		root["time_remaining"] = "00:00";
-		root["status"] = 0;
-		root["status_name"] = "idle";
-		root["mode"] = 8;
-		root["mode_name"] = "remote";
-	  }
+    String id = "WLED-" + WiFi.macAddress();
+    id.replace(":", "");
 
-	  // --------------------------------------------------
-	  // Advanced View
-	  // --------------------------------------------------
-	  JsonObject adv = root.createNestedObject("advancedView");
+    adv["HostName"] = id;
+    adv["HostDescription"] = devName;
+    adv["Platform"] = "WLED";
+    adv["Variant"] = "ESP32";
+    adv["Mode"] = "remote";
+    adv["Version"] = versionString;
 
-	  String devName = getDeviceName();
+    uint16_t major = 0;
+    uint16_t minor = 0;
 
-	  String id = "WLED-" + WiFi.macAddress();
-	  id.replace(":", "");
+    String ver = versionString;
+    int dashPos = ver.indexOf('-');
+    if (dashPos > 0) {
+      ver = ver.substring(0, dashPos);
+    }
 
-	  adv["HostName"] = id;
-	  adv["HostDescription"] = devName;
-	  adv["Platform"] = "WLED";
-	  adv["Variant"] = "ESP32";
-	  adv["Mode"] = "remote";
-	  adv["Version"] = versionString;
+    int dotPos = ver.indexOf('.');
+    if (dotPos > 0) {
+      major = ver.substring(0, dotPos).toInt();
+      minor = ver.substring(dotPos + 1).toInt();
+    } else {
+      major = ver.toInt();
+      minor = 0;
+    }
 
-	  uint16_t major = 0;
-	  uint16_t minor = 0;
+    adv["majorVersion"] = major;
+    adv["minorVersion"] = minor;
+    adv["typeId"] = 195;
+    adv["UUID"] = WiFi.macAddress();
 
-	  String ver = versionString;
-	  int dashPos = ver.indexOf('-');
-	  if (dashPos > 0) {
-		ver = ver.substring(0, dashPos);
-	  }
+    JsonObject util = adv.createNestedObject("Utilization");
+    util["MemoryFree"] = ESP.getFreeHeap();
+    util["Uptime"] = millis();
 
-	  int dotPos = ver.indexOf('.');
-	  if (dotPos > 0) {
-		major = ver.substring(0, dotPos).toInt();
-		minor = ver.substring(dotPos + 1).toInt();
-	  } else {
-		major = ver.toInt();
-		minor = 0;
-	  }
+    adv["rssi"] = WiFi.RSSI();
 
-	  adv["majorVersion"] = major;
-	  adv["minorVersion"] = minor;
-	  adv["typeId"] = 251;
-	  adv["UUID"] = WiFi.macAddress();
+    JsonArray ips = adv.createNestedArray("IPS");
+    ips.add(WiFi.localIP().toString());
 
-	  JsonObject util = adv.createNestedObject("Utilization");
-	  util["MemoryFree"] = ESP.getFreeHeap();
-	  util["Uptime"] = millis();
-
-	  adv["rssi"] = WiFi.RSSI();
-
-	  JsonArray ips = adv.createNestedArray("IPS");
-	  ips.add(WiFi.localIP().toString());
-	}
-
-	// Build JSON with system status
-	String buildSystemStatusJSON() {
-
-	  DynamicJsonDocument doc(2048);
-
-	  // --------------------------------------------------
-	  // MQTT
-	  // --------------------------------------------------
-	  JsonObject mqtt = doc.createNestedObject("MQTT");
-	  mqtt["configured"] = false;
-	  mqtt["connected"] = false;
-
-	  // --------------------------------------------------
-	  // Playlist Info
-	  // --------------------------------------------------
-	  JsonObject currentPlaylist = doc.createNestedObject("current_playlist");
-	  currentPlaylist["count"] = "0";
-	  currentPlaylist["description"] = "";
-	  currentPlaylist["index"] = "0";
-	  currentPlaylist["playlist"] = "";
-	  currentPlaylist["type"] = "";
-
-	  // --------------------------------------------------
-	  // Basic Status
-	  // --------------------------------------------------
-	  doc["volume"] = 70;
-	  doc["media_filename"] = "";
-	  doc["fppd"] = "running";
-	  doc["current_song"] = "";
-
-	  if (FSEQPlayer::isPlaying()) {
-
-		String fileName = FSEQPlayer::getFileName();
-		float elapsedF = FSEQPlayer::getElapsedSeconds();
-        uint32_t elapsed = (uint32_t)elapsedF;
-
-		doc["current_sequence"] = fileName;
-		doc["playlist"] = "";
-		doc["seconds_elapsed"] = String(elapsed);
-		doc["seconds_played"] = String(elapsed);
-		doc["seconds_remaining"] = "0";
-		doc["sequence_filename"] = fileName;
-
-		uint32_t mins = elapsed / 60;
-		uint32_t secs = elapsed % 60;
-		char timeStr[16];
-        snprintf(timeStr, sizeof(timeStr), "%02u:%02u", mins, secs);
-
-		doc["time_elapsed"] = timeStr;
-		doc["time_remaining"] = "00:00";
-
-		doc["status"] = 1;
-		doc["status_name"] = "playing";
-		doc["mode"] = 8;
-		doc["mode_name"] = "remote";
-
-	  } else {
-
-		doc["current_sequence"] = "";
-		doc["playlist"] = "";
-		doc["seconds_elapsed"] = "0";
-		doc["seconds_played"] = "0";
-		doc["seconds_remaining"] = "0";
-		doc["sequence_filename"] = "";
-		doc["time_elapsed"] = "00:00";
-		doc["time_remaining"] = "00:00";
-		doc["status"] = 0;
-		doc["status_name"] = "idle";
-		doc["mode"] = 8;
-		doc["mode_name"] = "remote";
-	  }
-
-	  // --------------------------------------------------
-	  // Advanced View
-	  // --------------------------------------------------
-	  JsonObject adv = doc.createNestedObject("advancedView");
-
-      String devName = getDeviceName();
-		
-      String id = "WLED-" + WiFi.macAddress();
-      id.replace(":", "");
-		
-	  adv["HostName"] = id;
-	  adv["HostDescription"] = devName;
-	  adv["Platform"] = "WLED";
-	  adv["Variant"] = "ESP32";
-	  adv["Mode"] = "remote";
-	  adv["Version"] = versionString;
-
-	  uint16_t major = 0;
-	  uint16_t minor = 0;
-
-	  String ver = versionString;
-	  int dashPos = ver.indexOf('-');
-	  if (dashPos > 0) {
-		ver = ver.substring(0, dashPos);
-	  }
-
-	  int dotPos = ver.indexOf('.');
-	  if (dotPos > 0) {
-		major = ver.substring(0, dotPos).toInt();
-		minor = ver.substring(dotPos + 1).toInt();
-	  } else {
-		major = ver.toInt();
-		minor = 0;
-	  }
-
-	  adv["majorVersion"] = major;
-	  adv["minorVersion"] = minor;
-	  adv["typeId"] = 251;
-	  adv["UUID"] = WiFi.macAddress();
-
-	  JsonObject util = adv.createNestedObject("Utilization");
-	  util["MemoryFree"] = ESP.getFreeHeap();
-	  util["Uptime"] = millis();
-
-	  adv["rssi"] = WiFi.RSSI();
-
-	  JsonArray ips = adv.createNestedArray("IPS");
-	  ips.add(WiFi.localIP().toString());
-
-	  // --------------------------------------------------
-	  // Serialize
-	  // --------------------------------------------------
-	  String json;
-	  serializeJson(doc, json);
-	  return json;
-	}
+    String json;
+	if (doc.overflowed()) {
+      DEBUG_PRINTLN(F("[FPP] JSON overflow in buildSystemInfoJSON"));
+    }
+    serializeJson(doc, json);
+    return json;
+  }
 
   // Build JSON for FPP multi-sync systems
-	String buildFppdMultiSyncSystemsJSON() {
-	  DynamicJsonDocument doc(1024);
+  String buildFppdMultiSyncSystemsJSON() {
+    DynamicJsonDocument doc(1024);
 
-	  JsonArray systems = doc.createNestedArray("systems");
-	  JsonObject sys = systems.createNestedObject();
+    JsonArray systems = doc.createNestedArray("systems");
+    JsonObject sys = systems.createNestedObject();
 
-	  String devName = getDeviceName();
+    String devName = getDeviceName();
 
-	  String id = "WLED-" + WiFi.macAddress();
-      id.replace(":", "");
+    String id = "WLED-" + WiFi.macAddress();
+    id.replace(":", "");
 
-	  sys["hostname"] = devName;
-	  sys["id"] = id;
-	  sys["ip"] = WiFi.localIP().toString();
-	  sys["version"] = versionString;
-	  sys["hardwareType"] = "WLED";
-	  sys["type"] = 251;
-	  sys["num_chan"] = strip.getLength() * 3;
-	  sys["NumPixelPort"] = 1;
-	  sys["NumSerialPort"] = 0;
-	  sys["mode"] = "remote";
+    sys["hostname"] = devName;
+    sys["id"] = id;
+    sys["ip"] = WiFi.localIP().toString();
+    sys["version"] = versionString;
+    sys["hardwareType"] = "WLED";
+    sys["type"] = 195;
+    sys["num_chan"] = strip.getLength() * 3;
+    sys["NumPixelPort"] = 1;
+    sys["NumSerialPort"] = 0;
+    sys["mode"] = "remote";
 
-	  String json;
-	  serializeJson(doc, json);
-	  return json;
-	}
+    String json;
+	if (doc.overflowed()) {
+      DEBUG_PRINTLN(F("[FPP] JSON overflow in buildSystemInfoJSON"));
+    }
+    serializeJson(doc, json);
+    return json;
+  }
 
   // UDP - send a ping packet
-void sendPingPacket(IPAddress destination = IPAddress(255, 255, 255, 255)) {
-  uint8_t buf[301];
-  memset(buf, 0, sizeof(buf));
+  void sendPingPacket(IPAddress destination = IPAddress(255, 255, 255, 255)) {
+    uint8_t buf[301];
+    memset(buf, 0, sizeof(buf));
 
-  // --------------------------------------------------
-  // Header
-  // --------------------------------------------------
-  buf[0] = 'F';
-  buf[1] = 'P';
-  buf[2] = 'P';
-  buf[3] = 'D';
+    buf[0] = 'F';
+    buf[1] = 'P';
+    buf[2] = 'P';
+    buf[3] = 'D';
 
-  buf[4] = 0x04;  // PacketType = Ping
+    buf[4] = 0x04;
 
-  // ExtraDataLen = 294 (Ping v3)  -> LITTLE ENDIAN
-  uint16_t dataLen = 294;
-  buf[5] = dataLen & 0xFF;
-  buf[6] = (dataLen >> 8) & 0xFF;
+    uint16_t dataLen = 294;
+    buf[5] = dataLen & 0xFF;
+    buf[6] = (dataLen >> 8) & 0xFF;
 
-  buf[7] = 0x03;  // Ping packet version = 3
-  buf[8] = 0x00;  // SubType = Ping
+    buf[7] = 0x03;
+    buf[8] = 0x00;
 
-  buf[9] = 0xFB;  // Hardware Type = WLED
+    buf[9] = 0xC3;
 
-  // --------------------------------------------------
-  // Version (MSB first!)
-  // --------------------------------------------------
-  uint16_t versionMajor = 0;
-  uint16_t versionMinor = 0;
+    uint16_t versionMajor = 0;
+    uint16_t versionMinor = 0;
 
-  String ver = versionString;
+    String ver = versionString;
 
-  int dashPos = ver.indexOf('-');
-  if (dashPos > 0) {
-    ver = ver.substring(0, dashPos);
+    int dashPos = ver.indexOf('-');
+    if (dashPos > 0) {
+      ver = ver.substring(0, dashPos);
+    }
+
+    int dotPos = ver.indexOf('.');
+    if (dotPos > 0) {
+      versionMajor = ver.substring(0, dotPos).toInt();
+      versionMinor = ver.substring(dotPos + 1).toInt();
+    }
+
+    buf[10] = (versionMajor >> 8) & 0xFF;
+    buf[11] = versionMajor & 0xFF;
+    buf[12] = (versionMinor >> 8) & 0xFF;
+    buf[13] = versionMinor & 0xFF;
+
+    buf[14] = 0x08;
+
+    IPAddress ip = WiFi.localIP();
+    buf[15] = ip[0];
+    buf[16] = ip[1];
+    buf[17] = ip[2];
+    buf[18] = ip[3];
+
+    String id = "WLED-" + WiFi.macAddress();
+    id.replace(":", "");
+
+    if (id.length() > 64)
+      id = id.substring(0, 64);
+
+    for (int i = 0; i < 64; i++) {
+      buf[19 + i] = (i < id.length()) ? id[i] : 0;
+    }
+
+    String verStr = versionString;
+    for (int i = 0; i < 40; i++) {
+      buf[84 + i] = (i < verStr.length()) ? verStr[i] : 0;
+    }
+
+    String hwType = "WLED";
+    for (int i = 0; i < 40; i++) {
+      buf[125 + i] = (i < hwType.length()) ? hwType[i] : 0;
+    }
+
+    String channelRanges = "";
+    for (int i = 0; i < 120; i++) {
+      buf[166 + i] = (i < channelRanges.length()) ? channelRanges[i] : 0;
+    }
+
+    udp.writeTo(buf, sizeof(buf), destination, udpPort);
   }
-
-  int dotPos = ver.indexOf('.');
-  if (dotPos > 0) {
-	versionMajor = ver.substring(0, dotPos).toInt();
-	versionMinor = ver.substring(dotPos + 1).toInt();
-  }
-
-  buf[10] = (versionMajor >> 8) & 0xFF;
-  buf[11] = versionMajor & 0xFF;
-  buf[12] = (versionMinor >> 8) & 0xFF;
-  buf[13] = versionMinor & 0xFF;
-
-  // --------------------------------------------------
-  // Operating Mode Flags
-  // 0x08 = Remote
-  // --------------------------------------------------
-  buf[14] = 0x08;
-
-  // --------------------------------------------------
-  // IP Address
-  // --------------------------------------------------
-  IPAddress ip = WiFi.localIP();
-  buf[15] = ip[0];
-  buf[16] = ip[1];
-  buf[17] = ip[2];
-  buf[18] = ip[3];
-
-  // --------------------------------------------------
-  // Hostname (19-83) 64 bytes + NULL
-  // --------------------------------------------------
-
-  String id = "WLED-" + WiFi.macAddress();
-  id.replace(":", "");
-
-  if (id.length() > 64)
-    id = id.substring(0, 64);
-
-  for (int i = 0; i < 64; i++) {
-    buf[19 + i] = (i < id.length()) ? id[i] : 0;
-  }
-
-  // --------------------------------------------------
-  // Version String (84-124) 40 bytes + NULL
-  // --------------------------------------------------
-  String verStr = versionString;
-  for (int i = 0; i < 40; i++) {
-    buf[84 + i] = (i < verStr.length()) ? verStr[i] : 0;
-  }
-
-  // --------------------------------------------------
-  // Hardware Type String (125-165) 40 bytes + NULL
-  // --------------------------------------------------
-  String hwType = "WLED";
-  for (int i = 0; i < 40; i++) {
-    buf[125 + i] = (i < hwType.length()) ? hwType[i] : 0;
-  }
-
-  // --------------------------------------------------
-  // Channel Ranges (166-286) 120 bytes + NULL
-  // --------------------------------------------------
-  String channelRanges = "";
-  for (int i = 0; i < 120; i++) {
-    buf[166 + i] = (i < channelRanges.length()) ? channelRanges[i] : 0;
-  }
-
-  // --------------------------------------------------
-  // Send packet
-  // --------------------------------------------------
-  udp.writeTo(buf, sizeof(buf), destination, udpPort);
-}
 
   // UDP - process received packet
   void processUdpPacket(AsyncUDPPacket packet) {
-    // Print the raw UDP packet in hex format for debugging
-    //  DEBUG_PRINTLN(F("[FPP] Raw UDP Packet:"));
-    //for (size_t i = 0; i < packet.length(); i++) {
-    //   DEBUG_PRINTF("%02X ", packet.data()[i]);
-    // }
-    // DEBUG_PRINTLN();
-
     if (packet.length() < 5)
       return;
     if (packet.data()[0] != 'F' || packet.data()[1] != 'P' ||
         packet.data()[2] != 'P' || packet.data()[3] != 'D')
       return;
+
     uint8_t packetType = packet.data()[4];
     switch (packetType) {
     case CTRL_PKT_SYNC: {
+      const size_t baseSize = 17;
 
-	  const size_t baseSize = 17; // up to seconds_elapsed
+      if (packet.length() <= baseSize) {
+        DEBUG_PRINTLN(F("[FPP] Sync packet too short, ignoring"));
+        break;
+      }
 
-	  if (packet.length() <= baseSize) {
-		DEBUG_PRINTLN(F("[FPP] Sync packet too short, ignoring"));
-		break;
-	  }
+      uint8_t syncAction = packet.data()[7];
+      uint32_t frameNumber = 0;
+      float secondsElapsed = 0.0f;
+      memcpy(&frameNumber, packet.data() + 9, sizeof(frameNumber));
+      memcpy(&secondsElapsed, packet.data() + 13, sizeof(secondsElapsed));
 
-	  uint8_t syncAction = packet.data()[7];
-	  uint32_t frameNumber = 0;
-	  float secondsElapsed = 0.0f;
-	  memcpy(&frameNumber, packet.data() + 9, sizeof(frameNumber));
-	  memcpy(&secondsElapsed, packet.data() + 13, sizeof(secondsElapsed));
+      DEBUG_PRINTLN(F("[FPP] Received UDP sync packet"));
+      DEBUG_PRINTF("[FPP] Sync Packet - Action: %d\n", syncAction);
+      DEBUG_PRINTF("[FPP] Frame Number: %lu\n", frameNumber);
+      DEBUG_PRINTF("[FPP] Seconds Elapsed: %.2f\n", secondsElapsed);
 
-	  DEBUG_PRINTLN(F("[FPP] Received UDP sync packet"));
-	  DEBUG_PRINTF("[FPP] Sync Packet - Action: %d\n", syncAction);
-	  DEBUG_PRINTF("[FPP] Frame Number: %lu\n", frameNumber);
-	  DEBUG_PRINTF("[FPP] Seconds Elapsed: %.2f\n", secondsElapsed);
+      size_t filenameOffset = 17;
+      size_t maxFilenameLen =
+          min((size_t)64, packet.length() - filenameOffset);
 
-	  // ---- SAFE filename extraction ----
-	  size_t filenameOffset = 17;
-	  size_t maxFilenameLen =
-		  min((size_t)64, packet.length() - filenameOffset);
+      char safeFilename[65];
+      memcpy(safeFilename, packet.data() + filenameOffset, maxFilenameLen);
+      safeFilename[maxFilenameLen] = '\0';
 
-	  char safeFilename[65];
-	  memcpy(safeFilename,
-			 packet.data() + filenameOffset,
-			 maxFilenameLen);
+      DEBUG_PRINT(F("[FPP] Filename: "));
+      DEBUG_PRINTLN(safeFilename);
 
-	  safeFilename[maxFilenameLen] = '\0';
-
-	  DEBUG_PRINT(F("[FPP] Filename: "));
-	  DEBUG_PRINTLN(safeFilename);
-
-	  ProcessSyncPacket(syncAction, String(safeFilename), secondsElapsed);
-
-	  break;
-	}
+      ProcessSyncPacket(syncAction, String(safeFilename), secondsElapsed);
+      break;
+    }
     case CTRL_PKT_PING:
       DEBUG_PRINTLN(F("[FPP] Received UDP ping packet"));
       sendPingPacket(packet.remoteIP());
@@ -676,11 +517,6 @@ void sendPingPacket(IPAddress destination = IPAddress(255, 255, 255, 255)) {
     }
   }
 
-  void addToJsonInfo(JsonObject& root) override
-  {
-    buildSystemStatusJSON_INFO(root);
-  }
-
 public:
   static const char _name[];
 
@@ -708,38 +544,39 @@ public:
 
     // Endpoint for file upload (raw, application/octet-stream)
     server.on(
-    "/fpp", HTTP_POST,
-    [](AsyncWebServerRequest *request) {
-    },
-    NULL,
-    [this](AsyncWebServerRequest *request,
-           uint8_t *data, size_t len,
-           size_t index, size_t total) {
+        "/fpp", HTTP_POST,
+        [](AsyncWebServerRequest *request) {
+        },
+        NULL,
+        [this](AsyncWebServerRequest *request,
+               uint8_t *data, size_t len,
+               size_t index, size_t total) {
 
-        // Debug optional:
-        DEBUG_PRINTF("[FPP] Chunk index=%u len=%u total=%u\n", index, len, total);
+						  
+																				  
 
-        if (index == 0) {
-			if (uploadStream || currentUploadFile) {
-                request->send(409, "text/plain", "Upload already in progress");
-                return;
+          // mark upload session activity on every chunk
+          uploadSessionActive = true;
+          lastUploadActivity = millis();
+					   
+			 
+
+          DEBUG_PRINTF("[FPP] Chunk index=%u len=%u total=%u\n", index, len, total);
+
+          if (index == 0) {
+            if (uploadStream || currentUploadFile) {
+              request->send(409, "text/plain", "Upload already in progress");
+              return;
+									   
             }
 
             DEBUG_PRINTLN("[FPP] Starting file upload");
-
-            if (uploadStream) {
-                uploadStream->flush();
-                delete uploadStream;
-                uploadStream = nullptr;
-            }
-
-            if (currentUploadFile) {
-                currentUploadFile.close();
-            }
+										  
+			 
 
             String fileParam = "";
             if (request->hasParam("filename")) {
-                fileParam = request->arg("filename");
+              fileParam = request->arg("filename");
             }
 
             currentUploadFileName =
@@ -751,51 +588,62 @@ public:
                          currentUploadFileName.c_str());
 
             if (SD_ADAPTER.exists(currentUploadFileName.c_str())) {
-                SD_ADAPTER.remove(currentUploadFileName.c_str());
+              SD_ADAPTER.remove(currentUploadFileName.c_str());
             }
 
             currentUploadFile =
                 SD_ADAPTER.open(currentUploadFileName.c_str(), FILE_WRITE);
 
             if (!currentUploadFile) {
-                DEBUG_PRINTLN(F("[FPP] ERROR: Failed to open file"));
-                request->send(500, "text/plain", "File open failed");
-                return;
+              DEBUG_PRINTLN(F("[FPP] ERROR: Failed to open file"));
+              request->send(500, "text/plain", "File open failed");
+              return;
             }
 
             uploadStream = new WriteBufferingStream(
                 currentUploadFile, FILE_UPLOAD_BUFFER_SIZE);
 
             uploadStartTime = millis();
-        }
+          }
 
-        if (uploadStream) {
+          if (uploadStream) {
             uploadStream->write(data, len);
-        }
+          }
 
-        if (index + len == total) {
-
+          if (index + len == total) {
             DEBUG_PRINTLN("[FPP] Upload finished");
 
             if (uploadStream) {
-                uploadStream->flush();
-                delete uploadStream;
-                uploadStream = nullptr;
+              uploadStream->flush();
+              delete uploadStream;
+              uploadStream = nullptr;
             }
 
+            String uploadedFile = currentUploadFileName;
+
             if (currentUploadFile) {
-                currentUploadFile.close();
+              currentUploadFile.close();
             }
 
             unsigned long duration = millis() - uploadStartTime;
             DEBUG_PRINTF("[FPP] Upload complete in %lu ms\n", duration);
 
+            String lowerName = uploadedFile;
+            lowerName.toLowerCase();
+
+            if (lowerName.endsWith(".xlz")) {
+              xlzPendingScan = true;
+              DEBUG_PRINTF("[XLZ] Deferred unpack scheduled for: %s\n",
+                           uploadedFile.c_str());
+            }
+
+            lastUploadFinished = millis();
+            lastUploadActivity = lastUploadFinished;
+
             currentUploadFileName = "";
-
             request->send(200, "text/plain", "Upload complete");
-        }
-    });
-
+          }
+        });
 
     // Endpoint to list FSEQ files on SD card
     server.on("/fseqfilelist", HTTP_GET, [](AsyncWebServerRequest *request) {
@@ -841,17 +689,48 @@ public:
     if (!udpStarted && (WiFi.status() == WL_CONNECTED)) {
       if (udp.listenMulticast(multicastAddr, udpPort)) {
         udpStarted = true;
-        udp.onPacket(
-            [this](AsyncUDPPacket packet) { processUdpPacket(packet); });
+        udp.onPacket([this](AsyncUDPPacket packet) { processUdpPacket(packet); });
         DEBUG_PRINTLN(F("[FPP] UDP listener started on multicast"));
       }
     }
-	
-    if (udpStarted && WiFi.status() == WL_CONNECTED) {
 
-      if (millis() - lastPingTime > pingInterval) {
-          sendPingPacket();
-          lastPingTime = millis();
+    // startup scan after reboot
+    if (xlzStartTime == 0) {
+      xlzStartTime = millis();
+      DEBUG_PRINTF("[XLZ] start timer at %lu\n", xlzStartTime);
+    }
+
+    if (!xlzChecked && (millis() - xlzStartTime >= 2000)) {
+      xlzChecked = true;
+
+      DEBUG_PRINTF("[XLZ] 2s reached, starting startup scan at %lu\n", millis());
+
+      File root = SD_ADAPTER.open("/");
+      if (!root || !root.isDirectory()) {
+        DEBUG_PRINTLN("[XLZ] SD root not accessible, skipping startup scan");
+        if (root) root.close();
+      } else {
+        root.close();
+        DEBUG_PRINTLN("[XLZ] SD ready -> startup scanning");
+        XLZUnzip::processAllPendingXLZ();
+        DEBUG_PRINTLN("[XLZ] startup scan finished");
+      }
+    }
+
+    // deferred XLZ processing after upload inactivity
+    if (uploadSessionActive && xlzPendingScan && !xlzProcessing) {
+      if (millis() - lastUploadActivity >= 10000) {
+        DEBUG_PRINTF("[XLZ] upload idle for 10s -> processing pending XLZ at %lu\n",
+                     millis());
+
+        xlzProcessing = true;
+        XLZUnzip::processAllPendingXLZ();
+        xlzProcessing = false;
+
+        xlzPendingScan = false;
+        uploadSessionActive = false;
+
+        DEBUG_PRINTLN("[XLZ] deferred upload scan finished");
       }
     }
   }
