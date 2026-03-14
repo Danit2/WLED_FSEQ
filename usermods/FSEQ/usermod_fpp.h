@@ -92,29 +92,28 @@ struct FPPMultiSyncPacket {
 // UsermodFPP class: Implements FPP (FSEQ/UDP) functionality
 class UsermodFPP : public Usermod {
 private:
-  AsyncUDP udpRx;            // receive socket
-  AsyncUDP udpTx;            // send socket
-  bool udpStarted = false;
-
-  const IPAddress multicastAddr = IPAddress(239, 70, 80, 80);
-  const uint16_t udpPort = 32320;
+  AsyncUDP udp;            // UDP object for FPP discovery/sync
+  bool udpStarted = false; // Flag to indicate UDP listener status
+  const IPAddress multicastAddr =
+      IPAddress(239, 70, 80, 80);         // Multicast address
+  const uint16_t udpPort = 32320; // UDP port
 
   unsigned long lastPingTime = 0;
   const unsigned long pingInterval = 10000;
 
-  // startup / reconnect announce burst
   bool announceBurstActive = false;
   uint8_t announceBurstRemaining = 0;
   unsigned long lastAnnounceBurstTime = 0;
   const unsigned long announceBurstInterval = 1000;
-  
+  wl_status_t lastWiFiStatus = WL_IDLE_STATUS;
+
   IPAddress getBroadcastAddress() {
     IPAddress ip = WiFi.localIP();
     IPAddress mask = WiFi.subnetMask();
     IPAddress broadcast;
 
     for (uint8_t i = 0; i < 4; i++) {
-      broadcast[i] = (ip[i] & mask[i]) | (~mask[i]);
+      broadcast[i] = (ip[i] & mask[i]) | (~mask[i] & 0xFF);
     }
 
     return broadcast;
@@ -336,24 +335,40 @@ private:
   void startUdpIfNeeded() {
     if (udpStarted || WiFi.status() != WL_CONNECTED) return;
 
-    if (udpRx.listenMulticast(multicastAddr, udpPort)) {
+    bool listenOk = false;
+
+    if (udp.listen(udpPort)) {
+      listenOk = true;
+      DEBUG_PRINTF("[FPP] UDP listener started on port %u\n", udpPort);
+    } else {
+      DEBUG_PRINTF("[FPP] UDP listener on port %u failed\n", udpPort);
+    }
+
+    if (udp.listenMulticast(multicastAddr, udpPort)) {
+      listenOk = true;
+      DEBUG_PRINTF("[FPP] UDP multicast listener started on %s:%u\n",
+                   multicastAddr.toString().c_str(), udpPort);
+    } else {
+      DEBUG_PRINTF("[FPP] UDP multicast listener failed on %s:%u\n",
+                   multicastAddr.toString().c_str(), udpPort);
+    }
+
+    if (listenOk) {
       udpStarted = true;
-      udpRx.onPacket([this](AsyncUDPPacket packet) { processUdpPacket(packet); });
+      udp.onPacket([this](AsyncUDPPacket packet) { processUdpPacket(packet); });
 
-      DEBUG_PRINTLN(F("[FPP] UDP listener started on multicast"));
-
-      // send several fast announce packets right after startup/reconnect
       announceBurstActive = true;
       announceBurstRemaining = 5;
       lastAnnounceBurstTime = 0;
-
-      // also trigger an immediate regular ping
       lastPingTime = 0;
+
+      DEBUG_PRINTLN(F("[FPP] Discovery listeners active"));
     } else {
-      DEBUG_PRINTLN(F("[FPP] UDP listener start failed"));
+      DEBUG_PRINTLN(F("[FPP] Failed to start any UDP discovery listener"));
     }
   }
 
+  // UDP - send a ping packet
   void sendPingPacket(IPAddress destination = IPAddress(255, 255, 255, 255)) {
     uint8_t buf[301];
     memset(buf, 0, sizeof(buf));
@@ -363,7 +378,7 @@ private:
     buf[2] = 'P';
     buf[3] = 'D';
 
-    buf[4] = CTRL_PKT_PING;
+    buf[4] = 0x04;
 
     uint16_t dataLen = 294;
     buf[5] = dataLen & 0xFF;
@@ -378,6 +393,7 @@ private:
     uint16_t versionMinor = 0;
 
     String ver = versionString;
+
     int dashPos = ver.indexOf('-');
     if (dashPos > 0) {
       ver = ver.substring(0, dashPos);
@@ -387,8 +403,6 @@ private:
     if (dotPos > 0) {
       versionMajor = ver.substring(0, dotPos).toInt();
       versionMinor = ver.substring(dotPos + 1).toInt();
-    } else {
-      versionMajor = ver.toInt();
     }
 
     buf[10] = (versionMajor >> 8) & 0xFF;
@@ -406,7 +420,9 @@ private:
 
     String id = "WLED-" + WiFi.macAddress();
     id.replace(":", "");
-    if (id.length() > 64) id = id.substring(0, 64);
+
+    if (id.length() > 64)
+      id = id.substring(0, 64);
 
     for (int i = 0; i < 64; i++) {
       buf[19 + i] = (i < id.length()) ? id[i] : 0;
@@ -422,17 +438,27 @@ private:
       buf[125 + i] = (i < hwType.length()) ? hwType[i] : 0;
     }
 
+    String channelRanges = "";
     for (int i = 0; i < 120; i++) {
-      buf[166 + i] = 0;
+      buf[166 + i] = (i < channelRanges.length()) ? channelRanges[i] : 0;
     }
 
-    bool ok = udpTx.writeTo(buf, sizeof(buf), destination, udpPort);
-
+    bool ok = udp.writeTo(buf, sizeof(buf), destination, udpPort);
     DEBUG_PRINTF("[FPP] Ping send %s -> %s:%u (%u bytes)\n",
                  ok ? "OK" : "FAILED",
                  destination.toString().c_str(),
                  udpPort,
                  sizeof(buf));
+  }
+
+
+  void sendDiscoveryBurst() {
+    IPAddress subnetBroadcast = getBroadcastAddress();
+    IPAddress globalBroadcast(255, 255, 255, 255);
+
+    sendPingPacket(subnetBroadcast);
+    sendPingPacket(multicastAddr);
+    sendPingPacket(globalBroadcast);
   }
 
   // UDP - process received packet
@@ -705,24 +731,36 @@ public:
       request->send(200, "text/plain", "FPP connect stopped");
     });
 
+    lastWiFiStatus = WiFi.status();
     startUdpIfNeeded();
-
   }
 
   // Main loop function
   void loop() {
+    wl_status_t wifiNow = WiFi.status();
+
+    if (wifiNow != lastWiFiStatus) {
+      DEBUG_PRINTF("[FPP] WiFi status changed: %d -> %d\n", lastWiFiStatus, wifiNow);
+
+      if (wifiNow == WL_CONNECTED) {
+        udpStarted = false;
+        announceBurstActive = true;
+        announceBurstRemaining = 5;
+        lastAnnounceBurstTime = 0;
+        lastPingTime = 0;
+      }
+
+      lastWiFiStatus = wifiNow;
+    }
+
     startUdpIfNeeded();
 
-    if (udpStarted && WiFi.status() == WL_CONNECTED) {
-      IPAddress broadcastIp = getBroadcastAddress();
-
-      // fast announce burst after startup / reconnect
+    if (udpStarted && wifiNow == WL_CONNECTED) {
       if (announceBurstActive &&
           (lastAnnounceBurstTime == 0 ||
            millis() - lastAnnounceBurstTime >= announceBurstInterval)) {
 
-        sendPingPacket(multicastAddr);
-        sendPingPacket(getBroadcastAddress());
+        sendDiscoveryBurst();
         lastAnnounceBurstTime = millis();
 
         if (announceBurstRemaining > 0) {
@@ -734,10 +772,8 @@ public:
         }
       }
 
-      // regular keepalive ping
       if (millis() - lastPingTime >= pingInterval) {
-        sendPingPacket(multicastAddr);
-        sendPingPacket(getBroadcastAddress());
+        sendDiscoveryBurst();
         lastPingTime = millis();
       }
     }
