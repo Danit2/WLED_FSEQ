@@ -19,6 +19,7 @@ int16_t FSEQ_findFileIndexByName(const String &name);
 void FSEQ_markFppControlActivity();
 void FSEQ_clearFppOverride();
 bool FSEQ_isFppOverrideActive();
+void FSEQ_invalidateFileIndexCache();
 
 class WriteBufferingStream : public Stream {
 public:
@@ -477,6 +478,7 @@ public:
           String lowerName = uploadedFile;
           lowerName.toLowerCase();
           if (lowerName.endsWith(".xlz")) xlzPendingScan = true;
+          else FSEQ_invalidateFileIndexCache();
           lastUploadFinished = millis();
           lastUploadActivity = lastUploadFinished;
           currentUploadFileName = "";
@@ -536,18 +538,22 @@ public:
 
     if (xlzStartTime == 0) xlzStartTime = millis();
     if (!xlzChecked && (millis() - xlzStartTime >= 2000)) {
-      xlzChecked = true;
       File root = SD_ADAPTER.open("/");
       if (root && root.isDirectory()) {
         root.close();
-        XLZUnzip::processAllPendingXLZ();
+        if (!FSEQPlayer::isAnyPlaybackActive()) {
+          XLZUnzip::processAllPendingXLZ();
+          xlzChecked = true;
+        }
       } else if (root) {
         root.close();
+        xlzChecked = true;
       }
     }
 
     if (uploadSessionActive && xlzPendingScan && !xlzProcessing) {
       if (millis() - lastUploadActivity >= 10000) {
+        if (FSEQPlayer::isAnyPlaybackActive()) return;
         xlzProcessing = true;
         XLZUnzip::processAllPendingXLZ();
         xlzProcessing = false;

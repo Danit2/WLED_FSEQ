@@ -1,5 +1,6 @@
 #include "xlz_unzip.h"
 #include "usermod_fseq.h" // Contains FSEQ playback logic and getter methods for pins
+#include "fseq_player.h"
 
 namespace {
 constexpr size_t XLZ_BUFFER_SIZE = 8192;
@@ -65,7 +66,7 @@ int32_t XLZUnzip::readZip(void* p, uint8_t* buffer, int32_t length) {
   FsHandle* h = static_cast<FsHandle*>(zf->fHandle);
   if (!h || !h->file) return 0;
 
-  if (!h->file.seek(h->pos)) return 0;
+  if (h->file.position() != h->pos && !h->file.seek(h->pos)) return 0;
 
   const int32_t bytesRead = static_cast<int32_t>(h->file.read(buffer, length));
   if (bytesRead > 0) h->pos += bytesRead;
@@ -290,6 +291,7 @@ bool XLZUnzip::unpackAndDelete(const String& archivePath, String* outFile) {
     *outFile = finalOutputPath;
   }
 
+  FSEQ_invalidateFileIndexCache();
   DEBUG_PRINTF("[XLZ] Done: %s\n", finalOutputPath.c_str());
   return true;
 }

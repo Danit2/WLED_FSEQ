@@ -36,6 +36,8 @@ public:
   static void clearSegmentPlayback(uint8_t segmentId);
   static void setSegmentLooping(uint8_t segmentId, bool loop);
   static bool isSegmentPlaying(uint8_t segmentId);
+  static bool isAnySegmentPlaying();
+  static bool isAnyPlaybackActive();
   static void renderSegmentFrame(uint8_t segmentId, Segment &segment);
 
   static void loadRecording(const char *filepath,
@@ -60,6 +62,9 @@ private:
     uint32_t now = 0;
     uint32_t next_time = 0;
     uint32_t frame = 0;
+    uint32_t file_size = 0;
+    uint32_t frame_data_offset = 0;
+    bool frame_position_dirty = true;
     FileHeader file_header = {{0,0,0,0},0,0,0,0,0,0,0,0};
   };
 
@@ -78,6 +83,9 @@ private:
   static void processFrameDataForSegment(PlaybackState &state, Segment &segment);
   static void processFrameDataRealtime(PlaybackState &state);
   static bool stopBecauseAtTheEnd(PlaybackState &state);
+  static bool ensureFrameDataPosition(PlaybackState &state);
+  static bool skipRemainingFrameData(PlaybackState &state, uint32_t bytesToSkip);
+  static void scheduleNextFrame(PlaybackState &state);
   static void playNextRecordingFrameForSegment(PlaybackState &state, Segment &segment);
   static void playNextRealtimeFrame(PlaybackState &state);
   static void loadRecordingIntoState(PlaybackState &state, const char *filepath,
@@ -92,6 +100,7 @@ uint16_t FSEQ_refreshFileIndexCache();
 uint16_t FSEQ_getFileIndexCount();
 bool FSEQ_getFileNameByIndex(uint16_t index, String &outName);
 int16_t FSEQ_findFileIndexByName(const String &name);
+void FSEQ_invalidateFileIndexCache();
 void FSEQ_markFppControlActivity();
 void FSEQ_clearFppOverride();
 bool FSEQ_isFppOverrideActive();

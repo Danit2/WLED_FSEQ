@@ -3,7 +3,7 @@
 #include "wled.h"
 #include "fseq_player.h"
 
-uint16_t FSEQ_refreshFileIndexCache();
+uint16_t FSEQ_getFileIndexCount();
 bool FSEQ_getFileNameByIndex(uint16_t index, String &outName);
 bool FSEQ_isFppOverrideActive();
 
@@ -29,7 +29,7 @@ static void mode_fseq_player(void) {
   }
 
   const uint8_t segId = strip.getCurrSegmentId();
-  const uint16_t fileCount = FSEQ_refreshFileIndexCache();
+  const uint16_t fileCount = FSEQ_getFileIndexCount();
   const uint16_t selectedIndex = SEGMENT.custom1;
   const bool loop = SEGMENT.check1;
 

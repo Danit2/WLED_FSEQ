@@ -3,6 +3,7 @@
 
 uint16_t FSEQ_refreshFileIndexCache();
 bool FSEQ_getFileNameByIndex(uint16_t index, String &outName);
+void FSEQ_invalidateFileIndexCache();
 
 struct UploadContext {
   File* file;
@@ -371,6 +372,7 @@ void WebUIManager::registerEndpoints() {
       }
 
       if (ctx) {
+        if (!ctx->error) FSEQ_invalidateFileIndexCache();
         if (ctx->file) {
           if (*(ctx->file)) ctx->file->close();
           delete ctx->file;
@@ -389,6 +391,7 @@ void WebUIManager::registerEndpoints() {
 
         ctx = new UploadContext();
         ctx->error = false;
+        if (SD_ADAPTER.exists(filename.c_str())) SD_ADAPTER.remove(filename.c_str());
         ctx->file = new File(SD_ADAPTER.open(filename.c_str(), FILE_WRITE));
 
         if (!*(ctx->file)) {
@@ -416,6 +419,7 @@ void WebUIManager::registerEndpoints() {
     if (!path.startsWith("/"))
       path = "/" + path;
     bool res = SD_ADAPTER.remove(path.c_str());
+    if (res) FSEQ_invalidateFileIndexCache();
     request->send(200, "text/plain", res ? "File deleted" : "Delete failed");
   });
 }

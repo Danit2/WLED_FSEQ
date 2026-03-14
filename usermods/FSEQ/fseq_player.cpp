@@ -24,6 +24,7 @@ constexpr size_t FSEQ_SHARED_FRAME_BUFFER_SIZE = 512;
 
 String gIndexedFseqFiles[FSEQ_MAX_INDEXED_FILES];
 uint16_t gIndexedFseqFileCount = 0;
+bool gIndexedFseqFilesDirty = true;
 uint32_t gFppLastControlMs = 0;
 bool gFppOverrideActive = false;
 
@@ -63,7 +64,11 @@ void insertSortedFseqName(const String &name) {
 }
 }  // namespace
 
+void FSEQ_invalidateFileIndexCache() { gIndexedFseqFilesDirty = true; }
+
 uint16_t FSEQ_refreshFileIndexCache() {
+  if (!gIndexedFseqFilesDirty) return gIndexedFseqFileCount;
+
   gIndexedFseqFileCount = 0;
 
   File root = SD_ADAPTER.open("/");
@@ -85,12 +90,14 @@ uint16_t FSEQ_refreshFileIndexCache() {
   }
 
   root.close();
+  gIndexedFseqFilesDirty = false;
   return gIndexedFseqFileCount;
 }
 
-uint16_t FSEQ_getFileIndexCount() { return gIndexedFseqFileCount; }
+uint16_t FSEQ_getFileIndexCount() { return FSEQ_refreshFileIndexCache(); }
 
 bool FSEQ_getFileNameByIndex(uint16_t index, String &outName) {
+  FSEQ_refreshFileIndexCache();
   if (index >= gIndexedFseqFileCount) {
     outName = "";
     return false;
@@ -103,9 +110,7 @@ int16_t FSEQ_findFileIndexByName(const String &name) {
   String normalized = name;
   if (!normalized.startsWith("/")) normalized = "/" + normalized;
 
-  if (gIndexedFseqFileCount == 0) {
-    FSEQ_refreshFileIndexCache();
-  }
+  FSEQ_refreshFileIndexCache();
 
   for (uint16_t i = 0; i < gIndexedFseqFileCount; i++) {
     if (gIndexedFseqFiles[i].equalsIgnoreCase(normalized)) {
@@ -176,17 +181,63 @@ void FSEQPlayer::printHeaderInfo(const PlaybackState &state) {
   DEBUG_PRINTF(" flags               = %d\n", state.file_header.flags);
 }
 
+bool FSEQPlayer::ensureFrameDataPosition(PlaybackState &state) {
+  if (!state.frame_position_dirty) return true;
+  if (!state.recordingFile.seek(state.frame_data_offset)) {
+    DEBUG_PRINTLN("[FSEQ] Failed to seek to frame data");
+    clearPlaybackState(state);
+    return false;
+  }
+  state.frame_position_dirty = false;
+  return true;
+}
+
+bool FSEQPlayer::skipRemainingFrameData(PlaybackState &state, uint32_t bytesToSkip) {
+  if (bytesToSkip == 0) return true;
+  (void)bytesToSkip;
+
+  const uint32_t newOffset = state.frame_data_offset + state.file_header.channel_count;
+  if (!state.recordingFile.seek(newOffset)) {
+    DEBUG_PRINTLN("[FSEQ] Failed to skip remaining frame data");
+    clearPlaybackState(state);
+    return false;
+  }
+  return true;
+}
+
+void FSEQPlayer::scheduleNextFrame(PlaybackState &state) {
+  const uint32_t step = state.file_header.step_time;
+  if (step == 0) {
+    state.next_time = 0;
+    return;
+  }
+
+  if (state.next_time == 0) {
+    state.next_time = state.now + step;
+    return;
+  }
+
+  uint32_t nextTime = state.next_time + step;
+  if ((int32_t)(state.now - nextTime) > (int32_t)(step * 4U)) {
+    nextTime = state.now + step;
+  }
+  state.next_time = nextTime;
+}
+
 void FSEQPlayer::processFrameDataForSegment(PlaybackState &state, Segment &segment) {
-  uint32_t packetLength = state.file_header.channel_count;
-  uint16_t segLen = segment.length();
-  uint16_t maxLeds = min((uint32_t)segLen, packetLength / 3U);
-  uint32_t bytes_remaining = packetLength;
+  const uint32_t packetLength = state.file_header.channel_count;
+  const uint16_t segLen = segment.length();
+  const uint16_t maxLeds = min((uint32_t)segLen, packetLength / 3U);
+  const uint32_t bytesToRender = min(packetLength, (uint32_t)maxLeds * 3U);
+  uint32_t bytesRemainingToRender = bytesToRender;
   uint16_t index = 0;
 
-  while (index < maxLeds && bytes_remaining > 0) {
-    uint16_t length = (uint16_t)min(bytes_remaining, (uint32_t)FSEQ_SHARED_FRAME_BUFFER_SIZE);
+  while (bytesRemainingToRender > 0) {
+    const uint16_t length =
+        (uint16_t)min(bytesRemainingToRender, (uint32_t)FSEQ_SHARED_FRAME_BUFFER_SIZE);
 
-    size_t bytesRead = state.recordingFile.readBytes((char*)gFseqFrameBuffer, length);
+    const size_t bytesRead =
+        state.recordingFile.readBytes((char *)gFseqFrameBuffer, length);
     if (bytesRead != length) {
       DEBUG_PRINTF("[FSEQ] Short SD read in segment playback (%u/%u), stopping state\n",
                    (unsigned)bytesRead, (unsigned)length);
@@ -194,15 +245,13 @@ void FSEQPlayer::processFrameDataForSegment(PlaybackState &state, Segment &segme
       return;
     }
 
-    bytes_remaining -= length;
+    bytesRemainingToRender -= length;
 
     for (uint16_t offset = 0; offset + 2 < length; offset += 3) {
       segment.setPixelColor(
           index,
-          RGBW32(gFseqFrameBuffer[offset],
-                 gFseqFrameBuffer[offset + 1],
-                 gFseqFrameBuffer[offset + 2],
-                 0));
+          RGBW32(gFseqFrameBuffer[offset], gFseqFrameBuffer[offset + 1],
+                 gFseqFrameBuffer[offset + 2], 0));
       if (++index >= maxLeds) break;
     }
   }
@@ -211,20 +260,26 @@ void FSEQPlayer::processFrameDataForSegment(PlaybackState &state, Segment &segme
     segment.setPixelColor(i, BLACK);
   }
 
-  state.next_time = state.now + state.file_header.step_time;
+  if (!skipRemainingFrameData(state, packetLength - bytesToRender)) return;
+
+  state.frame_data_offset += state.file_header.channel_count;
+  scheduleNextFrame(state);
 }
 
 void FSEQPlayer::processFrameDataRealtime(PlaybackState &state) {
-  uint32_t packetLength = state.file_header.channel_count;
-  uint16_t totalLen = strip.getLengthTotal();
-  uint16_t maxLeds = min((uint32_t)totalLen, packetLength / 3U);
-  uint32_t bytes_remaining = packetLength;
+  const uint32_t packetLength = state.file_header.channel_count;
+  const uint16_t totalLen = strip.getLengthTotal();
+  const uint16_t maxLeds = min((uint32_t)totalLen, packetLength / 3U);
+  const uint32_t bytesToRender = min(packetLength, (uint32_t)maxLeds * 3U);
+  uint32_t bytesRemainingToRender = bytesToRender;
   uint16_t index = 0;
 
-  while (index < maxLeds && bytes_remaining > 0) {
-    uint16_t length = (uint16_t)min(bytes_remaining, (uint32_t)FSEQ_SHARED_FRAME_BUFFER_SIZE);
+  while (bytesRemainingToRender > 0) {
+    const uint16_t length =
+        (uint16_t)min(bytesRemainingToRender, (uint32_t)FSEQ_SHARED_FRAME_BUFFER_SIZE);
 
-    size_t bytesRead = state.recordingFile.readBytes((char*)gFseqFrameBuffer, length);
+    const size_t bytesRead =
+        state.recordingFile.readBytes((char *)gFseqFrameBuffer, length);
     if (bytesRead != length) {
       DEBUG_PRINTF("[FSEQ] Short SD read in realtime playback (%u/%u), stopping state\n",
                    (unsigned)bytesRead, (unsigned)length);
@@ -232,14 +287,12 @@ void FSEQPlayer::processFrameDataRealtime(PlaybackState &state) {
       return;
     }
 
-    bytes_remaining -= length;
+    bytesRemainingToRender -= length;
 
     for (uint16_t offset = 0; offset + 2 < length; offset += 3) {
-      setRealtimePixel(index,
-                       gFseqFrameBuffer[offset],
+      setRealtimePixel(index, gFseqFrameBuffer[offset],
                        gFseqFrameBuffer[offset + 1],
-                       gFseqFrameBuffer[offset + 2],
-                       0);
+                       gFseqFrameBuffer[offset + 2], 0);
       if (++index >= maxLeds) break;
     }
   }
@@ -247,22 +300,28 @@ void FSEQPlayer::processFrameDataRealtime(PlaybackState &state) {
   for (uint16_t i = index; i < totalLen; i++) {
     setRealtimePixel(i, 0, 0, 0, 0);
   }
+
+  if (!skipRemainingFrameData(state, packetLength - bytesToRender)) return;
+
   realtimeLock(3000, REALTIME_MODE_FSEQ);
-  state.next_time = state.now + state.file_header.step_time;
+  state.frame_data_offset += state.file_header.channel_count;
+  scheduleNextFrame(state);
 }
 
 bool FSEQPlayer::stopBecauseAtTheEnd(PlaybackState &state) {
   if (state.frame >= state.file_header.frame_count) {
     if (state.recordingRepeats == RECORDING_REPEAT_LOOP) {
       state.frame = 0;
-      state.recordingFile.seek(state.file_header.channel_data_offset);
+      state.frame_data_offset = state.file_header.channel_data_offset;
+      state.frame_position_dirty = true;
       return false;
     }
 
     if (state.recordingRepeats > 0) {
       state.recordingRepeats--;
       state.frame = 0;
-      state.recordingFile.seek(state.file_header.channel_data_offset);
+      state.frame_data_offset = state.file_header.channel_data_offset;
+      state.frame_position_dirty = true;
       DEBUG_PRINTF("Repeat recording again for: %d\n", state.recordingRepeats);
       return false;
     }
@@ -277,29 +336,17 @@ bool FSEQPlayer::stopBecauseAtTheEnd(PlaybackState &state) {
 
 void FSEQPlayer::playNextRecordingFrameForSegment(PlaybackState &state, Segment &segment) {
   if (stopBecauseAtTheEnd(state)) return;
+  if (!ensureFrameDataPosition(state)) return;
 
-  uint32_t offset = state.file_header.channel_data_offset +
-                    (state.file_header.channel_count * state.frame++);
-  if (!state.recordingFile.seek(offset) && state.recordingFile.position() != offset) {
-    DEBUG_PRINTLN("Failed to seek to proper offset for channel data!");
-    clearPlaybackState(state);
-    return;
-  }
-
+  state.frame++;
   processFrameDataForSegment(state, segment);
 }
 
 void FSEQPlayer::playNextRealtimeFrame(PlaybackState &state) {
   if (stopBecauseAtTheEnd(state)) return;
+  if (!ensureFrameDataPosition(state)) return;
 
-  uint32_t offset = state.file_header.channel_data_offset +
-                    (state.file_header.channel_count * state.frame++);
-  if (!state.recordingFile.seek(offset) && state.recordingFile.position() != offset) {
-    DEBUG_PRINTLN("Failed to seek to proper offset for channel data!");
-    clearPlaybackState(state);
-    return;
-  }
-
+  state.frame++;
   processFrameDataRealtime(state);
 }
 
@@ -324,11 +371,14 @@ void FSEQPlayer::loadRecordingIntoState(PlaybackState &state, const char *filepa
     return;
   }
 
+  state.file_size = (uint32_t)state.recordingFile.size();
   state.currentFileName = String(filepath);
-  if (state.currentFileName.startsWith("/")) state.currentFileName = state.currentFileName.substring(1);
+  if (state.currentFileName.startsWith("/")) {
+    state.currentFileName = state.currentFileName.substring(1);
+  }
 
-  if ((uint64_t)state.recordingFile.available() < sizeof(state.file_header)) {
-    DEBUG_PRINTF("Invalid file size: %d\n", state.recordingFile.available());
+  if (state.file_size < sizeof(state.file_header)) {
+    DEBUG_PRINTF("Invalid file size: %lu\n", (unsigned long)state.file_size);
     clearPlaybackState(state);
     return;
   }
@@ -357,9 +407,23 @@ void FSEQPlayer::loadRecordingIntoState(PlaybackState &state, const char *filepa
     return;
   }
 
-  if (((uint64_t)state.file_header.channel_count * (uint64_t)state.file_header.frame_count) +
-          state.file_header.header_length >
-      UINT32_MAX) {
+  if (state.file_header.header_length > state.file_header.channel_data_offset) {
+    DEBUG_PRINTF("Error reading FSEQ file %s header, invalid header offsets\n", filepath);
+    clearPlaybackState(state);
+    return;
+  }
+
+  const uint64_t requiredSize =
+      (uint64_t)state.file_header.channel_data_offset +
+      ((uint64_t)state.file_header.channel_count * (uint64_t)state.file_header.frame_count);
+
+  if (requiredSize > state.file_size) {
+    DEBUG_PRINTF("Error reading FSEQ file %s header, truncated frame data\n", filepath);
+    clearPlaybackState(state);
+    return;
+  }
+
+  if (requiredSize > UINT32_MAX) {
     DEBUG_PRINTF("Error reading FSEQ file %s header, file too long (max 4gb)\n", filepath);
     clearPlaybackState(state);
     return;
@@ -373,7 +437,13 @@ void FSEQPlayer::loadRecordingIntoState(PlaybackState &state, const char *filepa
 
   state.recordingRepeats = loop ? RECORDING_REPEAT_LOOP : RECORDING_REPEAT_DEFAULT;
   state.frame = (uint32_t)((secondsElapsed * 1000.0f) / state.file_header.step_time);
-  if (state.frame >= state.file_header.frame_count) state.frame = state.file_header.frame_count - 1;
+  if (state.frame >= state.file_header.frame_count) {
+    state.frame = state.file_header.frame_count - 1;
+  }
+  state.frame_data_offset =
+      state.file_header.channel_data_offset +
+      (state.file_header.channel_count * state.frame);
+  state.frame_position_dirty = true;
   state.next_time = 0;
   state.secondsElapsed = secondsElapsed;
 }
@@ -384,9 +454,10 @@ void FSEQPlayer::clearPlaybackState(PlaybackState &state) {
   state.now = 0;
   state.secondsElapsed = 0;
   state.recordingRepeats = RECORDING_REPEAT_DEFAULT;
-  state.file_header.frame_count = 0;
-  state.file_header.channel_count = 0;
-  state.file_header.step_time = 0;
+  state.file_size = 0;
+  state.frame_data_offset = 0;
+  state.frame_position_dirty = true;
+  state.file_header = {{0,0,0,0},0,0,0,0,0,0,0,0};
   if (state.recordingFile) state.recordingFile.close();
   state.currentFileName = "";
 }
@@ -426,12 +497,23 @@ bool FSEQPlayer::isSegmentPlaying(uint8_t segmentId) {
   return isStatePlaying(segmentStates[segmentId]);
 }
 
+bool FSEQPlayer::isAnySegmentPlaying() {
+  for (uint8_t i = 0; i < MAX_NUM_SEGMENTS; i++) {
+    if (isStatePlaying(segmentStates[i])) return true;
+  }
+  return false;
+}
+
+bool FSEQPlayer::isAnyPlaybackActive() {
+  return isStatePlaying(realtimeState) || isAnySegmentPlaying();
+}
+
 void FSEQPlayer::renderSegmentFrame(uint8_t segmentId, Segment &segment) {
   if (segmentId >= MAX_NUM_SEGMENTS) return;
   PlaybackState &state = segmentStates[segmentId];
   state.now = millis();
   if (!isStatePlaying(state)) return;
-  if (state.now < state.next_time) return;
+  if (state.next_time != 0 && (int32_t)(state.now - state.next_time) < 0) return;
   playNextRecordingFrameForSegment(state, segment);
 }
 
@@ -452,7 +534,10 @@ float FSEQPlayer::getElapsedSeconds() { return getElapsedSeconds(realtimeState);
 void FSEQPlayer::renderRealtimeFrame() {
   realtimeState.now = millis();
   if (!isStatePlaying(realtimeState)) return;
-  if (realtimeState.now < realtimeState.next_time) return;
+  if (realtimeState.next_time != 0 &&
+      (int32_t)(realtimeState.now - realtimeState.next_time) < 0) {
+    return;
+  }
   playNextRealtimeFrame(realtimeState);
   if (!useMainSegmentOnly) strip.show();
   else strip.trigger();
@@ -465,24 +550,23 @@ void FSEQPlayer::syncPlayback(float secondsElapsed) {
     return;
   }
 
-  uint32_t expectedFrame = (uint32_t)((secondsElapsed * 1000.0f) / state.file_header.step_time);
-  if (expectedFrame >= state.file_header.frame_count) expectedFrame = state.file_header.frame_count - 1;
+  uint32_t expectedFrame =
+      (uint32_t)((secondsElapsed * 1000.0f) / state.file_header.step_time);
+  if (expectedFrame >= state.file_header.frame_count) {
+    expectedFrame = state.file_header.frame_count - 1;
+  }
 
   int32_t diff = (int32_t)expectedFrame - (int32_t)state.frame;
 
   if (abs(diff) > 30) {
     state.frame = expectedFrame;
+    state.frame_data_offset =
+        state.file_header.channel_data_offset +
+        ((uint32_t)state.file_header.channel_count * state.frame);
+    state.frame_position_dirty = true;
 
-    uint32_t offset = state.file_header.channel_data_offset +
-                      (uint32_t)state.file_header.channel_count * state.frame;
-
-    if (state.recordingFile.seek(offset)) {
-      DEBUG_PRINTF("[FSEQ] HARD Sync -> frame=%lu (diff=%ld)\n",
-                   (unsigned long)expectedFrame, (long)diff);
-    } else {
-      DEBUG_PRINTLN("[FSEQ] HARD Sync failed to seek");
-    }
-
+    DEBUG_PRINTF("[FSEQ] HARD Sync -> frame=%lu (diff=%ld)\n",
+                 (unsigned long)expectedFrame, (long)diff);
     return;
   }
 
@@ -490,10 +574,21 @@ void FSEQPlayer::syncPlayback(float secondsElapsed) {
     float correctionFactor = 0.05f * abs(diff);
     correctionFactor = constrain(correctionFactor, 0.05f, 0.4f);
 
-    int32_t timeAdjustment = (int32_t)(diff * state.file_header.step_time * correctionFactor);
-    state.next_time -= timeAdjustment;
+    int32_t timeAdjustment =
+        (int32_t)(diff * state.file_header.step_time * correctionFactor);
 
-    DEBUG_PRINTF("[FSEQ] Soft Sync diff=%ld factor=%.3f adjust=%ldus\n",
+    uint32_t adjustedNextTime = state.next_time;
+    if (timeAdjustment >= 0) {
+      adjustedNextTime =
+          (state.next_time > (uint32_t)timeAdjustment)
+              ? (state.next_time - (uint32_t)timeAdjustment)
+              : millis();
+    } else {
+      adjustedNextTime = state.next_time + (uint32_t)(-timeAdjustment);
+    }
+    state.next_time = adjustedNextTime;
+
+    DEBUG_PRINTF("[FSEQ] Soft Sync diff=%ld factor=%.3f adjust=%ldms\n",
                  (long)diff, correctionFactor, (long)timeAdjustment);
   } else {
     DEBUG_PRINTF("[FSEQ] Sync OK (current=%lu expected=%lu)\n",

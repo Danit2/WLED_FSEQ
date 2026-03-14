@@ -48,7 +48,7 @@ public:
   }
 
   // Unique ID for the usermod
-  uint16_t getId() override { return USERMOD_ID_SD_CARD; }
+  uint16_t getId() override { return USERMOD_ID_FSEQ; }
 
   // Add a link in the Info tab to your SD
   void addToJsonInfo(JsonObject &root) override {
