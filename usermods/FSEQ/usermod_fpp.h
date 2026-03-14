@@ -721,7 +721,8 @@ public:
           (lastAnnounceBurstTime == 0 ||
            millis() - lastAnnounceBurstTime >= announceBurstInterval)) {
 
-        sendPingPacket(broadcastIp);
+        sendPingPacket(multicastAddr);
+        sendPingPacket(getBroadcastAddress());
         lastAnnounceBurstTime = millis();
 
         if (announceBurstRemaining > 0) {
@@ -735,7 +736,8 @@ public:
 
       // regular keepalive ping
       if (millis() - lastPingTime >= pingInterval) {
-        sendPingPacket(broadcastIp);
+        sendPingPacket(multicastAddr);
+        sendPingPacket(getBroadcastAddress());
         lastPingTime = millis();
       }
     }
