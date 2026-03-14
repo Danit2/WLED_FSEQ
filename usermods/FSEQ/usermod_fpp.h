@@ -97,6 +97,9 @@ private:
   const IPAddress multicastAddr =
       IPAddress(239, 70, 80, 80);         // Multicast address
   const uint16_t udpPort = 32320; // UDP port
+  
+  unsigned long lastPingTime = 0;
+  unsigned long pingInterval = 10000;
 
   // Variables for FSEQ file upload
   File currentUploadFile;
@@ -676,6 +679,13 @@ public:
         udpStarted = true;
         udp.onPacket([this](AsyncUDPPacket packet) { processUdpPacket(packet); });
         DEBUG_PRINTLN(F("[FPP] UDP listener started on multicast"));
+      }
+    }
+	
+    if (udpStarted && WiFi.status() == WL_CONNECTED) {
+      if (millis() - lastPingTime > pingInterval) {
+          sendPingPacket();
+          lastPingTime = millis();
       }
     }
 
