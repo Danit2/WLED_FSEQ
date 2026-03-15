@@ -3,13 +3,7 @@
 #include "usermod_fseq.h"
 #include "xlz_unzip.h"
 #include "wled.h"
-
-#ifdef WLED_USE_SD_SPI
-#include <SD.h>
-#include <SPI.h>
-#elif defined(WLED_USE_SD_MMC)
-#include "SD_MMC.h"
-#endif
+#include "sd_adapter_compat.h"
 
 #include <AsyncUDP.h>
 #include <ESPAsyncWebServer.h>

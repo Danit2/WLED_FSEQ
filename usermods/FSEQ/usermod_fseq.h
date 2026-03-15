@@ -1,20 +1,7 @@
 #pragma once
 
 #include "wled.h"
-
-#ifdef WLED_USE_SD_SPI
-#include <SD.h>
-#include <SPI.h>
-#endif
-
-// Define SD_ADAPTER macro if not already defined (used by FSEQ file operations)
-#ifndef SD_ADAPTER
-#if defined(WLED_USE_SD_SPI)
-#define SD_ADAPTER SD
-#elif defined(WLED_USE_SD_MMC)
-#define SD_ADAPTER SD_MMC
-#endif
-#endif
+#include "sd_adapter_compat.h"
 
 #include "fseq_player.h"
 #include "fseq_effect.h"
