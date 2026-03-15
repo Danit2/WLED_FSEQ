@@ -142,7 +142,7 @@ private:
     }
     doc["majorVersion"] = major;
     doc["minorVersion"] = minor;
-    doc["typeId"] = 251;
+    doc["typeId"] = 195;
     doc["UUID"] = WiFi.macAddress();
     doc["zip"] = true;
     JsonObject utilization = doc.createNestedObject("Utilization");
@@ -233,7 +233,7 @@ private:
     }
     adv["majorVersion"] = major;
     adv["minorVersion"] = minor;
-    adv["typeId"] = 251;
+    adv["typeId"] = 195;
     adv["UUID"] = WiFi.macAddress();
     JsonObject util = adv.createNestedObject("Utilization");
     util["MemoryFree"] = ESP.getFreeHeap();
@@ -258,7 +258,7 @@ private:
     sys["ip"] = WiFi.localIP().toString();
     sys["version"] = versionString;
     sys["hardwareType"] = "WLED";
-    sys["type"] = 251;
+    sys["type"] = 195;
     sys["num_chan"] = strip.getLength() * 3;
     sys["NumPixelPort"] = 1;
     sys["NumSerialPort"] = 0;
@@ -353,7 +353,7 @@ private:
     buf[6] = (dataLen >> 8) & 0xFF;
     buf[7] = 0x03;
     buf[8] = 0x00;
-    buf[9] = 0xFB;
+    buf[9] = 0xC3;
     uint16_t versionMajor = 0, versionMinor = 0;
     String ver = versionString;
     int dashPos = ver.indexOf('-');

@@ -65,7 +65,11 @@ private:
     uint32_t file_size = 0;
     uint32_t frame_data_offset = 0;
     bool frame_position_dirty = true;
-    FileHeader file_header = {{0,0,0,0},0,0,0,0,0,0,0,0};
+    FileHeader file_header{};
+
+    float syncErrorFilteredMs = 0.0f;
+    float syncSlewMs = 0.0f;
+    float syncCarryMs = 0.0f;
   };
 
   static const int FSEQ_DEFAULT_STEP_TIME = 50;

@@ -314,6 +314,10 @@ bool FSEQPlayer::stopBecauseAtTheEnd(PlaybackState &state) {
       state.frame = 0;
       state.frame_data_offset = state.file_header.channel_data_offset;
       state.frame_position_dirty = true;
+      state.syncErrorFilteredMs = 0.0f;
+      state.syncSlewMs = 0.0f;
+      state.syncCarryMs = 0.0f;
+      state.next_time = 0;
       return false;
     }
 
@@ -322,6 +326,10 @@ bool FSEQPlayer::stopBecauseAtTheEnd(PlaybackState &state) {
       state.frame = 0;
       state.frame_data_offset = state.file_header.channel_data_offset;
       state.frame_position_dirty = true;
+      state.syncErrorFilteredMs = 0.0f;
+      state.syncSlewMs = 0.0f;
+      state.syncCarryMs = 0.0f;
+      state.next_time = 0;
       DEBUG_PRINTF("Repeat recording again for: %d\n", state.recordingRepeats);
       return false;
     }
@@ -446,6 +454,9 @@ void FSEQPlayer::loadRecordingIntoState(PlaybackState &state, const char *filepa
   state.frame_position_dirty = true;
   state.next_time = 0;
   state.secondsElapsed = secondsElapsed;
+  state.syncErrorFilteredMs = 0.0f;
+  state.syncSlewMs = 0.0f;
+  state.syncCarryMs = 0.0f;
 }
 
 void FSEQPlayer::clearPlaybackState(PlaybackState &state) {
@@ -457,7 +468,10 @@ void FSEQPlayer::clearPlaybackState(PlaybackState &state) {
   state.file_size = 0;
   state.frame_data_offset = 0;
   state.frame_position_dirty = true;
-  state.file_header = {{0,0,0,0},0,0,0,0,0,0,0,0};
+  state.file_header = {};
+  state.syncErrorFilteredMs = 0.0f;
+  state.syncSlewMs = 0.0f;
+  state.syncCarryMs = 0.0f;
   if (state.recordingFile) state.recordingFile.close();
   state.currentFileName = "";
 }
@@ -542,10 +556,6 @@ void FSEQPlayer::renderRealtimeFrame() {
   if (!useMainSegmentOnly) strip.show();
   else strip.trigger();
 }
-
-float syncErrorFilteredMs = 0.0f;
-float syncSlewMs = 0.0f;
-float syncCarryMs = 0.0f;
 
 void FSEQPlayer::syncPlayback(float secondsElapsed) {
   PlaybackState &state = realtimeState;
