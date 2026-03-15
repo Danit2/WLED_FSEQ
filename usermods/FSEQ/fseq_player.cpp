@@ -543,55 +543,88 @@ void FSEQPlayer::renderRealtimeFrame() {
   else strip.trigger();
 }
 
+float syncErrorFilteredMs = 0.0f;
+float syncSlewMs = 0.0f;
+float syncCarryMs = 0.0f;
+
 void FSEQPlayer::syncPlayback(float secondsElapsed) {
   PlaybackState &state = realtimeState;
+
   if (!isStatePlaying(state)) {
     DEBUG_PRINTLN("[FSEQ] Sync: Playback not active, cannot sync.");
     return;
   }
 
-  uint32_t expectedFrame =
-      (uint32_t)((secondsElapsed * 1000.0f) / state.file_header.step_time);
-  if (expectedFrame >= state.file_header.frame_count) {
-    expectedFrame = state.file_header.frame_count - 1;
+  if (state.file_header.step_time == 0 || state.file_header.frame_count == 0) {
+    DEBUG_PRINTLN("[FSEQ] Sync: Invalid timing info.");
+    return;
   }
 
-  int32_t diff = (int32_t)expectedFrame - (int32_t)state.frame;
+  const float stepMs = (float)state.file_header.step_time;
 
-  if (abs(diff) > 30) {
-    state.frame = expectedFrame;
+  float targetMs = secondsElapsed * 1000.0f;
+  const float maxMs = (float)(state.file_header.frame_count - 1) * stepMs;
+  targetMs = constrain(targetMs, 0.0f, maxMs);
+
+  const float localMs = (float)state.frame * stepMs;
+  const float errorMs = targetMs - localMs;  // >0 = wir sind hinten
+
+  if (fabsf(errorMs) >= 250.0f) { 
+    const uint32_t targetFrame = (uint32_t)(targetMs / stepMs);
+
+    state.frame = targetFrame;
     state.frame_data_offset =
         state.file_header.channel_data_offset +
         ((uint32_t)state.file_header.channel_count * state.frame);
     state.frame_position_dirty = true;
 
-    DEBUG_PRINTF("[FSEQ] HARD Sync -> frame=%lu (diff=%ld)\n",
-                 (unsigned long)expectedFrame, (long)diff);
+    state.syncErrorFilteredMs = 0.0f;
+    state.syncSlewMs = 0.0f;
+    state.syncCarryMs = 0.0f;
+    state.next_time = millis() + (uint32_t)stepMs;
+
+    DEBUG_PRINTF("[FSEQ] HARD Sync -> frame=%lu err=%.2fms\n",
+                 (unsigned long)targetFrame, errorMs);
     return;
   }
 
-  if (abs(diff) > 1) {
-    float correctionFactor = 0.05f * abs(diff);
-    correctionFactor = constrain(correctionFactor, 0.05f, 0.4f);
-
-    int32_t timeAdjustment =
-        (int32_t)(diff * state.file_header.step_time * correctionFactor);
-
-    uint32_t adjustedNextTime = state.next_time;
-    if (timeAdjustment >= 0) {
-      adjustedNextTime =
-          (state.next_time > (uint32_t)timeAdjustment)
-              ? (state.next_time - (uint32_t)timeAdjustment)
-              : millis();
-    } else {
-      adjustedNextTime = state.next_time + (uint32_t)(-timeAdjustment);
-    }
-    state.next_time = adjustedNextTime;
-
-    DEBUG_PRINTF("[FSEQ] Soft Sync diff=%ld factor=%.3f adjust=%ldms\n",
-                 (long)diff, correctionFactor, (long)timeAdjustment);
-  } else {
-    DEBUG_PRINTF("[FSEQ] Sync OK (current=%lu expected=%lu)\n",
-                 (unsigned long)state.frame, (unsigned long)expectedFrame);
+  if (fabsf(errorMs) < 2.0f) {
+    state.syncErrorFilteredMs *= 0.90f;
+    state.syncSlewMs *= 0.80f;
+    return;
   }
+
+  state.syncErrorFilteredMs =
+      state.syncErrorFilteredMs * 0.85f + errorMs * 0.15f;
+
+  float desiredSlewMs = state.syncErrorFilteredMs * 0.03f;
+  desiredSlewMs = constrain(desiredSlewMs, -1.25f, 1.25f);
+
+  state.syncSlewMs = state.syncSlewMs * 0.75f + desiredSlewMs * 0.25f;
+
+  state.syncCarryMs += state.syncSlewMs;
+
+  int32_t adjustMs = 0;
+  if (state.syncCarryMs >= 1.0f) {
+    adjustMs = (int32_t)floorf(state.syncCarryMs);
+  } else if (state.syncCarryMs <= -1.0f) {
+    adjustMs = (int32_t)ceilf(state.syncCarryMs);
+  }
+  state.syncCarryMs -= (float)adjustMs;
+
+  int32_t next = (int32_t)state.next_time - adjustMs;
+  const int32_t now = (int32_t)millis();
+
+  if (next < now) next = now;
+  if (next > now + (int32_t)(stepMs * 2.0f)) {
+    next = now + (int32_t)(stepMs * 2.0f);
+  }
+
+  state.next_time = (uint32_t)next;
+
+  DEBUG_PRINTF("[FSEQ] Soft Sync err=%.2fms filt=%.2fms slew=%.3fms adj=%ldms\n",
+               errorMs,
+               state.syncErrorFilteredMs,
+               state.syncSlewMs,
+               (long)adjustMs);
 }

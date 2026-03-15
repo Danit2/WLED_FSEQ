@@ -81,6 +81,13 @@ private:
   bool udpStarted = false;
   const IPAddress multicastAddr = IPAddress(239, 70, 80, 80);
   const uint16_t udpPort = 32320;
+  unsigned long lastPingTime = 0;
+  const unsigned long pingInterval = 10000;
+  bool announceBurstActive = false;
+  uint8_t announceBurstRemaining = 0;
+  unsigned long lastAnnounceBurstTime = 0;
+  const unsigned long announceBurstInterval = 1000;
+  wl_status_t lastWiFiStatus = WL_IDLE_STATUS;
 
   File currentUploadFile;
   String currentUploadFileName = "";
@@ -261,6 +268,81 @@ private:
     return json;
   }
 
+  IPAddress getBroadcastAddress() {
+    IPAddress ip = WiFi.localIP();
+    IPAddress mask = WiFi.subnetMask();
+    IPAddress broadcast;
+    for (uint8_t i = 0; i < 4; i++) {
+      broadcast[i] = (ip[i] & mask[i]) | (~mask[i] & 0xFF);
+    }
+    return broadcast;
+  }
+
+  void startUdpIfNeeded() {
+    if (udpStarted || WiFi.status() != WL_CONNECTED) return;
+
+    bool listenOk = false;
+    IPAddress localIp = WiFi.localIP();
+    IPAddress subnetBroadcast = getBroadcastAddress();
+    IPAddress globalBroadcast(255, 255, 255, 255);
+
+    if (udp.listen(udpPort)) {
+      listenOk = true;
+      DEBUG_PRINTF("[FPP] UDP listener started on port %u\n", udpPort);
+    } else {
+      DEBUG_PRINTF("[FPP] UDP listener on port %u failed\n", udpPort);
+    }
+
+    if (udp.listen(localIp, udpPort)) {
+      listenOk = true;
+      DEBUG_PRINTF("[FPP] UDP listener started on %s:%u\n",
+                   localIp.toString().c_str(), udpPort);
+    } else {
+      DEBUG_PRINTF("[FPP] UDP listener failed on %s:%u\n",
+                   localIp.toString().c_str(), udpPort);
+    }
+
+    if (udp.listen(subnetBroadcast, udpPort)) {
+      listenOk = true;
+      DEBUG_PRINTF("[FPP] UDP listener started on %s:%u\n",
+                   subnetBroadcast.toString().c_str(), udpPort);
+    } else {
+      DEBUG_PRINTF("[FPP] UDP listener failed on %s:%u\n",
+                   subnetBroadcast.toString().c_str(), udpPort);
+    }
+
+    if (udp.listen(globalBroadcast, udpPort)) {
+      listenOk = true;
+      DEBUG_PRINTF("[FPP] UDP listener started on %s:%u\n",
+                   globalBroadcast.toString().c_str(), udpPort);
+    } else {
+      DEBUG_PRINTF("[FPP] UDP listener failed on %s:%u\n",
+                   globalBroadcast.toString().c_str(), udpPort);
+    }
+
+    if (udp.listenMulticast(multicastAddr, udpPort)) {
+      listenOk = true;
+      DEBUG_PRINTF("[FPP] UDP multicast listener started on %s:%u\n",
+                   multicastAddr.toString().c_str(), udpPort);
+    } else {
+      DEBUG_PRINTF("[FPP] UDP multicast listener failed on %s:%u\n",
+                   multicastAddr.toString().c_str(), udpPort);
+    }
+
+    if (!listenOk) {
+      DEBUG_PRINTLN(F("[FPP] Failed to start any UDP discovery listener"));
+      return;
+    }
+
+    udpStarted = true;
+    udp.onPacket([this](AsyncUDPPacket packet) { processUdpPacket(packet); });
+    announceBurstActive = true;
+    announceBurstRemaining = 5;
+    lastAnnounceBurstTime = 0;
+    lastPingTime = 0;
+    DEBUG_PRINTLN(F("[FPP] Discovery listeners active"));
+  }
+
   void sendPingPacket(IPAddress destination = IPAddress(255, 255, 255, 255)) {
     uint8_t buf[301];
     memset(buf, 0, sizeof(buf));
@@ -297,7 +379,21 @@ private:
     String hwType = "WLED";
     for (int i = 0; i < 40; i++) buf[125 + i] = (i < hwType.length()) ? hwType[i] : 0;
     for (int i = 0; i < 120; i++) buf[166 + i] = 0;
-    udp.writeTo(buf, sizeof(buf), destination, udpPort);
+    bool ok = udp.writeTo(buf, sizeof(buf), destination, udpPort);
+    DEBUG_PRINTF("[FPP] Ping %s -> %s:%u len=%u\n",
+                 ok ? "sent" : "FAILED",
+                 destination.toString().c_str(),
+                 udpPort,
+                 sizeof(buf));
+  }
+
+  void sendDiscoveryBurst() {
+    IPAddress subnetBroadcast = getBroadcastAddress();
+    IPAddress globalBroadcast(255, 255, 255, 255);
+
+    sendPingPacket(subnetBroadcast);
+    sendPingPacket(multicastAddr);
+    sendPingPacket(globalBroadcast);
   }
 
   void queuePendingCommand(PendingCommandType cmd,
@@ -510,19 +606,48 @@ public:
       request->send(200, "application/json", json);
     });
 
-    if (!udpStarted && (WiFi.status() == WL_CONNECTED)) {
-      if (udp.listenMulticast(multicastAddr, udpPort)) {
-        udpStarted = true;
-        udp.onPacket([this](AsyncUDPPacket packet) { processUdpPacket(packet); });
-      }
-    }
+    lastWiFiStatus = WiFi.status();
+    startUdpIfNeeded();
   }
 
   void loop() {
-    if (!udpStarted && (WiFi.status() == WL_CONNECTED)) {
-      if (udp.listenMulticast(multicastAddr, udpPort)) {
-        udpStarted = true;
-        udp.onPacket([this](AsyncUDPPacket packet) { processUdpPacket(packet); });
+    wl_status_t wifiNow = WiFi.status();
+
+    if (wifiNow != lastWiFiStatus) {
+      DEBUG_PRINTF("[FPP] WiFi status changed: %d -> %d\n", lastWiFiStatus, wifiNow);
+
+      if (wifiNow == WL_CONNECTED) {
+        udpStarted = false;
+        announceBurstActive = true;
+        announceBurstRemaining = 5;
+        lastAnnounceBurstTime = 0;
+        lastPingTime = 0;
+        startUdpIfNeeded();
+      }
+
+      lastWiFiStatus = wifiNow;
+    }
+
+    startUdpIfNeeded();
+
+    if (udpStarted && wifiNow == WL_CONNECTED) {
+      if (announceBurstActive &&
+          (lastAnnounceBurstTime == 0 ||
+           millis() - lastAnnounceBurstTime >= announceBurstInterval)) {
+        sendDiscoveryBurst();
+        lastAnnounceBurstTime = millis();
+
+        if (announceBurstRemaining > 0) {
+          announceBurstRemaining--;
+        }
+        if (announceBurstRemaining == 0) {
+          announceBurstActive = false;
+        }
+      }
+
+      if (millis() - lastPingTime >= pingInterval) {
+        sendDiscoveryBurst();
+        lastPingTime = millis();
       }
     }
 
