@@ -41,10 +41,7 @@ public:
       buffer += toCopy;
       size -= toCopy;
       total += toCopy;
-      if (_offset == _capacity) {
-        _upstream.write(_buffer, _offset);
-        _offset = 0;
-      }
+      if (_offset == _capacity) flush();
     }
     return total;
   }
@@ -74,7 +71,10 @@ private:
 
 class UsermodFPP : public Usermod {
 private:
-  AsyncUDP udp;
+  AsyncUDP udpListen;
+  AsyncUDP udpMulticast;
+  bool udpListenStarted = false;
+  bool udpMulticastStarted = false;
   bool udpStarted = false;
   const IPAddress multicastAddr = IPAddress(239, 70, 80, 80);
   const uint16_t udpPort = 32320;
@@ -113,7 +113,65 @@ private:
   float pendingSecondsElapsed = 0.0f;
   IPAddress lastFppSenderIP = IPAddress(0, 0, 0, 0);
 
+  float lastFppSyncSeconds = 0.0f;
+  uint32_t lastFppSyncMillis = 0;
+  float lastStatusElapsedSeconds = 0.0f;
+  uint32_t lastStatusElapsedMillis = 0;
+  char lastSequenceName[65] = {0};
+
   String getDeviceName() { return String(serverDescription); }
+
+  void cacheSequenceName(const char *fileName) {
+    memset(lastSequenceName, 0, sizeof(lastSequenceName));
+    if (!fileName || fileName[0] == '\0') return;
+
+    const char *normalized = (fileName[0] == '/') ? fileName + 1 : fileName;
+    const size_t len = strnlen(normalized, sizeof(lastSequenceName) - 1);
+    memcpy(lastSequenceName, normalized, len);
+  }
+
+  void rememberSyncProgress(const char *fileName, float secondsElapsed) {
+    if (fileName && fileName[0] != '\0') {
+      cacheSequenceName(fileName);
+    }
+    lastFppSyncSeconds = secondsElapsed;
+    if (lastFppSyncSeconds < 0.0f) lastFppSyncSeconds = 0.0f;
+    lastFppSyncMillis = millis();
+  }
+
+  void clearPlaybackStatusCache(bool clearSequenceName = false) {
+    lastFppSyncSeconds = 0.0f;
+    lastFppSyncMillis = 0;
+    lastStatusElapsedSeconds = 0.0f;
+    lastStatusElapsedMillis = 0;
+    if (clearSequenceName) {
+      memset(lastSequenceName, 0, sizeof(lastSequenceName));
+    }
+  }
+
+  float getStableStatusElapsedSeconds() {
+    const uint32_t now = millis();
+    float elapsed = FSEQPlayer::getElapsedSeconds();
+
+    if (elapsed <= 0.0f && lastFppSyncMillis != 0) {
+      const float syncElapsed =
+          lastFppSyncSeconds + ((float)(now - lastFppSyncMillis) / 1000.0f);
+      if (syncElapsed > elapsed) elapsed = syncElapsed;
+    }
+
+    if (elapsed <= 0.0f && lastStatusElapsedMillis != 0) {
+      const float heldElapsed =
+          lastStatusElapsedSeconds + ((float)(now - lastStatusElapsedMillis) / 1000.0f);
+      if (heldElapsed > elapsed) elapsed = heldElapsed;
+    }
+
+    if (elapsed > 0.0f) {
+      lastStatusElapsedSeconds = elapsed;
+      lastStatusElapsedMillis = now;
+    }
+
+    return (elapsed > 0.0f) ? elapsed : 0.0f;
+  }
 
   String buildSystemInfoJSON() {
     DynamicJsonDocument doc(1024);
@@ -174,11 +232,17 @@ private:
     const bool playbackActive = FSEQPlayer::isPlaying() ||
                                 FSEQ_isFppOverrideActive() ||
                                 (realtimeMode == REALTIME_MODE_FSEQ &&
-                                 FSEQPlayer::getFileName().length() > 0);
+                                 lastSequenceName[0] != '\0');
 
     if (playbackActive) {
       String fileName = FSEQPlayer::getFileName();
-      float elapsedF = FSEQPlayer::getElapsedSeconds();
+      if (fileName.length() == 0 && lastSequenceName[0] != '\0') {
+        fileName = String(lastSequenceName);
+      } else if (fileName.length() > 0) {
+        cacheSequenceName(fileName.c_str());
+      }
+
+      float elapsedF = getStableStatusElapsedSeconds();
       uint32_t elapsed = (uint32_t)elapsedF;
       doc["current_sequence"] = fileName;
       doc["playlist"] = "";
@@ -280,50 +344,30 @@ private:
     return broadcast;
   }
 
+  void stopUdpListeners() {
+    if (udpListenStarted) udpListen.close();
+    if (udpMulticastStarted) udpMulticast.close();
+    udpListenStarted = false;
+    udpMulticastStarted = false;
+    udpStarted = false;
+  }
+
   void startUdpIfNeeded() {
     if (udpStarted || WiFi.status() != WL_CONNECTED) return;
 
-    bool listenOk = false;
-    IPAddress localIp = WiFi.localIP();
-    IPAddress subnetBroadcast = getBroadcastAddress();
-    IPAddress globalBroadcast(255, 255, 255, 255);
+    stopUdpListeners();
 
-    if (udp.listen(udpPort)) {
-      listenOk = true;
+    udpListenStarted = udpListen.listen(udpPort);
+    if (udpListenStarted) {
+      udpListen.onPacket([this](AsyncUDPPacket packet) { processUdpPacket(packet); });
       DEBUG_PRINTF("[FPP] UDP listener started on port %u\n", udpPort);
     } else {
       DEBUG_PRINTF("[FPP] UDP listener on port %u failed\n", udpPort);
     }
 
-    if (udp.listen(localIp, udpPort)) {
-      listenOk = true;
-      DEBUG_PRINTF("[FPP] UDP listener started on %s:%u\n",
-                   localIp.toString().c_str(), udpPort);
-    } else {
-      DEBUG_PRINTF("[FPP] UDP listener failed on %s:%u\n",
-                   localIp.toString().c_str(), udpPort);
-    }
-
-    if (udp.listen(subnetBroadcast, udpPort)) {
-      listenOk = true;
-      DEBUG_PRINTF("[FPP] UDP listener started on %s:%u\n",
-                   subnetBroadcast.toString().c_str(), udpPort);
-    } else {
-      DEBUG_PRINTF("[FPP] UDP listener failed on %s:%u\n",
-                   subnetBroadcast.toString().c_str(), udpPort);
-    }
-
-    if (udp.listen(globalBroadcast, udpPort)) {
-      listenOk = true;
-      DEBUG_PRINTF("[FPP] UDP listener started on %s:%u\n",
-                   globalBroadcast.toString().c_str(), udpPort);
-    } else {
-      DEBUG_PRINTF("[FPP] UDP listener failed on %s:%u\n",
-                   globalBroadcast.toString().c_str(), udpPort);
-    }
-
-    if (udp.listenMulticast(multicastAddr, udpPort)) {
-      listenOk = true;
+    udpMulticastStarted = udpMulticast.listenMulticast(multicastAddr, udpPort);
+    if (udpMulticastStarted) {
+      udpMulticast.onPacket([this](AsyncUDPPacket packet) { processUdpPacket(packet); });
       DEBUG_PRINTF("[FPP] UDP multicast listener started on %s:%u\n",
                    multicastAddr.toString().c_str(), udpPort);
     } else {
@@ -331,13 +375,12 @@ private:
                    multicastAddr.toString().c_str(), udpPort);
     }
 
-    if (!listenOk) {
-      DEBUG_PRINTLN(F("[FPP] Failed to start any UDP discovery listener"));
+    udpStarted = udpListenStarted || udpMulticastStarted;
+    if (!udpStarted) {
+      DEBUG_PRINTLN(F("[FPP] Failed to start UDP listeners"));
       return;
     }
 
-    udpStarted = true;
-    udp.onPacket([this](AsyncUDPPacket packet) { processUdpPacket(packet); });
     announceBurstActive = true;
     announceBurstRemaining = 5;
     lastAnnounceBurstTime = 0;
@@ -381,7 +424,9 @@ private:
     String hwType = "WLED";
     for (int i = 0; i < 40; i++) buf[125 + i] = (i < hwType.length()) ? hwType[i] : 0;
     for (int i = 0; i < 120; i++) buf[166 + i] = 0;
-    bool ok = udp.writeTo(buf, sizeof(buf), destination, udpPort);
+    AsyncUDP *txUdp = udpListenStarted ? &udpListen
+                                       : (udpMulticastStarted ? &udpMulticast : nullptr);
+    bool ok = txUdp ? txUdp->writeTo(buf, sizeof(buf), destination, udpPort) : false;
     DEBUG_PRINTF("[FPP] Ping %s -> %s:%u len=%u\n",
                  ok ? "sent" : "FAILED",
                  destination.toString().c_str(),
@@ -394,7 +439,6 @@ private:
     IPAddress globalBroadcast(255, 255, 255, 255);
 
     sendPingPacket(subnetBroadcast);
-    sendPingPacket(multicastAddr);
     sendPingPacket(globalBroadcast);
   }
 
@@ -408,7 +452,7 @@ private:
     lastFppSenderIP = senderIP;
     memset(pendingFileName, 0, sizeof(pendingFileName));
     if (fileName && fileName[0] != '\0') {
-      const size_t len = strnlen(fileName, 64);
+      const size_t len = strnlen(fileName, sizeof(pendingFileName) - 1);
       memcpy(pendingFileName, fileName, len);
     }
     portEXIT_CRITICAL(&fppMux);
@@ -438,12 +482,14 @@ private:
 
       switch (syncAction) {
         case 0:
+          rememberSyncProgress(safeFilename, secondsElapsed);
           queuePendingCommand(PENDING_START, safeFilename, secondsElapsed, packet.remoteIP());
           break;
         case 1:
-          queuePendingCommand(PENDING_STOP);
+          queuePendingCommand(PENDING_STOP, nullptr, 0.0f, packet.remoteIP());
           break;
         case 2:
+          rememberSyncProgress(safeFilename, secondsElapsed);
           queuePendingCommand(PENDING_SYNC, safeFilename, secondsElapsed, packet.remoteIP());
           break;
         default:
@@ -455,7 +501,7 @@ private:
       sendPingPacket(packet.remoteIP());
       break;
     case CTRL_PKT_BLANK:
-      queuePendingCommand(PENDING_BLANK);
+      queuePendingCommand(PENDING_BLANK, nullptr, 0.0f, packet.remoteIP());
       break;
     default:
       break;
@@ -466,8 +512,14 @@ private:
                                float secondsElapsed,
                                const IPAddress &senderIP) {
     String normalized = fileName;
-    if (!normalized.startsWith("/")) normalized = "/" + normalized;
+    if (normalized.length() == 0) {
+      if (lastSequenceName[0] == '\0') return;
+      normalized = "/" + String(lastSequenceName);
+    } else if (!normalized.startsWith("/")) {
+      normalized = "/" + normalized;
+    }
 
+    rememberSyncProgress(normalized.c_str(), secondsElapsed);
     FSEQ_markFppControlActivity();
     realtimeIP = senderIP;
     useMainSegmentOnly = false;
@@ -479,6 +531,7 @@ private:
   void stopRealtimeFppPlayback() {
     FSEQ_clearFppOverride();
     FSEQPlayer::clearLastPlayback();
+    clearPlaybackStatusCache(false);
     exitRealtime();
   }
 
@@ -511,12 +564,32 @@ private:
         break;
       case PENDING_SYNC: {
         String normalized = fn;
-        if (!normalized.startsWith("/")) normalized = "/" + normalized;
+        if (normalized.length() == 0) {
+          if (FSEQPlayer::isPlaying()) {
+            normalized = "/" + FSEQPlayer::getFileName();
+          } else if (lastSequenceName[0] != '\0') {
+            normalized = "/" + String(lastSequenceName);
+          }
+        } else if (!normalized.startsWith("/")) {
+          normalized = "/" + normalized;
+        }
+
+        rememberSyncProgress(normalized.c_str(), seconds);
         FSEQ_markFppControlActivity();
         realtimeIP = senderIP;
         useMainSegmentOnly = false;
         realtimeLock(3000, REALTIME_MODE_FSEQ);
-        if (!FSEQPlayer::isPlaying() || !FSEQPlayer::getFileName().equalsIgnoreCase(normalized.substring(1))) {
+
+        if (normalized.length() == 0) {
+          if (FSEQPlayer::isPlaying()) {
+            FSEQPlayer::syncPlayback(seconds);
+          }
+          break;
+        }
+
+        const String activeFileName = FSEQPlayer::getFileName();
+        if (!FSEQPlayer::isPlaying() ||
+            !activeFileName.equalsIgnoreCase(normalized.substring(1))) {
           startRealtimeFppPlayback(normalized, seconds, senderIP);
         } else {
           FSEQPlayer::syncPlayback(seconds);
@@ -622,24 +695,23 @@ public:
       DEBUG_PRINTF("[FPP] WiFi status changed: %d -> %d\n", lastWiFiStatus, wifiNow);
 
       if (wifiNow == WL_CONNECTED) {
-        udpStarted = false;
+        stopUdpListeners();
         announceBurstActive = true;
         announceBurstRemaining = 5;
         lastAnnounceBurstTime = 0;
         lastPingTime = 0;
         startUdpIfNeeded();
+      } else {
+        stopUdpListeners();
       }
 
       lastWiFiStatus = wifiNow;
     }
 
     startUdpIfNeeded();
+    processPendingFppCommand();
 
-    const bool pauseDiscovery = FSEQ_isFppOverrideActive() ||
-                                (realtimeMode == REALTIME_MODE_FSEQ &&
-                                 FSEQPlayer::isPlaying());
-
-    if (udpStarted && wifiNow == WL_CONNECTED && !pauseDiscovery) {
+    if (udpStarted && wifiNow == WL_CONNECTED) {
       if (announceBurstActive &&
           (lastAnnounceBurstTime == 0 ||
            millis() - lastAnnounceBurstTime >= announceBurstInterval)) {
@@ -660,14 +732,14 @@ public:
       }
     }
 
-    processPendingFppCommand();
-
     if (FSEQ_isFppOverrideActive()) {
       realtimeIP = lastFppSenderIP;
       realtimeLock(3000, REALTIME_MODE_FSEQ);
       FSEQPlayer::renderRealtimeFrame();
     } else if (realtimeMode == REALTIME_MODE_FSEQ && FSEQPlayer::isPlaying()) {
       stopRealtimeFppPlayback();
+    } else if (!FSEQPlayer::isPlaying() && !FSEQ_isFppOverrideActive()) {
+      clearPlaybackStatusCache(false);
     }
 
     if (xlzStartTime == 0) xlzStartTime = millis();
