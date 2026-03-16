@@ -227,7 +227,9 @@ void FSEQPlayer::resetTimingFromCurrentFrame(PlaybackState &state, uint32_t now)
   }
 
   const uint32_t frameOffsetMs = state.frame * step;
-  state.playback_start_time = (frameOffsetMs > now) ? 0U : (now - frameOffsetMs);
+  // Use wrap-safe unsigned timing so late-join can anchor to an elapsed time
+  // that is already larger than the local millis() uptime.
+  state.playback_start_time = now - frameOffsetMs;
   scheduleNextFrame(state);
 }
 
@@ -242,16 +244,8 @@ void FSEQPlayer::alignFrameToLocalTime(PlaybackState &state, uint32_t now) {
   // handle loop/stop logic instead of snapping back to the last frame again.
   if (state.frame >= state.file_header.frame_count) return;
 
-  if (state.playback_start_time == 0) {
-    resetTimingFromCurrentFrame(state, now);
-    return;
-  }
-
   const uint32_t maxFrame = state.file_header.frame_count - 1U;
-  uint32_t localFrame = state.frame;
-  if (now >= state.playback_start_time) {
-    localFrame = (now - state.playback_start_time) / step;
-  }
+  uint32_t localFrame = (uint32_t)(now - state.playback_start_time) / step;
   if (localFrame > maxFrame) localFrame = maxFrame;
 
   if (localFrame != state.frame) {
@@ -519,7 +513,9 @@ void FSEQPlayer::loadRecordingIntoState(PlaybackState &state, const char *filepa
 
   const uint32_t now = millis();
   const uint32_t startMsU32 = (uint32_t)startMs;
-  state.playback_start_time = (startMsU32 > now) ? 0U : (now - startMsU32);
+  // Wrap-safe anchor: allows joining an already-running sequence even when
+  // local uptime is still smaller than the elapsed sequence time.
+  state.playback_start_time = now - startMsU32;
 
   state.secondsElapsed = secondsElapsed;
   if (&state == &realtimeState) gLastRealtimeLockMs = 0;
@@ -565,14 +561,7 @@ float FSEQPlayer::getElapsedSeconds(const PlaybackState &state) {
   if (step == 0) return 0;
 
   uint32_t now = millis();
-  uint32_t elapsedMs = 0;
-  if (now >= state.playback_start_time) {
-    elapsedMs = now - state.playback_start_time;
-  } else if (state.secondsElapsed > 0.0f) {
-    elapsedMs = (uint32_t)(state.secondsElapsed * 1000.0f);
-  } else {
-    elapsedMs = state.frame * step;
-  }
+  uint32_t elapsedMs = now - state.playback_start_time;
 
   const uint32_t maxMs = (state.file_header.frame_count - 1U) * step;
   if (elapsedMs > maxMs) elapsedMs = maxMs;
@@ -688,13 +677,13 @@ void FSEQPlayer::syncPlayback(float secondsElapsed) {
   state.secondsElapsed = targetMs / 1000.0f;
 
   bool timingAdjusted = false;
-  if (state.playback_start_time == 0) {
+  if (state.playback_start_time == 0 && (state.frame != 0 || state.secondsElapsed > 0.0f)) {
     const uint32_t targetMsU32 = (uint32_t)targetMs;
-    state.playback_start_time = (targetMsU32 > now) ? 0U : (now - targetMsU32);
+    state.playback_start_time = now - targetMsU32;
     timingAdjusted = true;
   }
 
-  const float localMs = (float)(now - state.playback_start_time);
+  const float localMs = (float)(uint32_t)(now - state.playback_start_time);
   const float errorMs = targetMs - localMs;  // >0 = wir sind hinten
 
   if (fabsf(errorMs) >= 150.0f) {
@@ -710,7 +699,7 @@ void FSEQPlayer::syncPlayback(float secondsElapsed) {
     state.frame_position_dirty = true;
 
     const uint32_t targetMsU32 = (uint32_t)targetMs;
-    state.playback_start_time = (targetMsU32 > now) ? 0U : (now - targetMsU32);
+    state.playback_start_time = now - targetMsU32;
     state.syncErrorFilteredMs = 0.0f;
     state.syncSlewMs = 0.0f;
     state.syncCarryMs = 0.0f;
@@ -745,9 +734,7 @@ void FSEQPlayer::syncPlayback(float secondsElapsed) {
   state.syncCarryMs -= (float)adjustMs;
 
   if (adjustMs != 0) {
-    int32_t shiftedStart = (int32_t)state.playback_start_time - adjustMs;
-    if (shiftedStart < 0) shiftedStart = 0;
-    state.playback_start_time = (uint32_t)shiftedStart;
+    state.playback_start_time = (uint32_t)(state.playback_start_time - adjustMs);
     timingAdjusted = true;
   }
 
