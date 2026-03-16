@@ -12,6 +12,10 @@ FSEQPlayer::PlaybackState FSEQPlayer::realtimeState;
 FSEQPlayer::PlaybackState FSEQPlayer::segmentStates[MAX_NUM_SEGMENTS];
 
 namespace {
+// Keep the cache larger than the effect UI range.
+// The effect uses c3 (0..31) for easier local selection,
+// but FPP/file-name based playback must still be able to
+// find more files than that by name.
 constexpr uint16_t FSEQ_MAX_INDEXED_FILES = 128;
 constexpr uint32_t FSEQ_FPP_OVERRIDE_TIMEOUT_MS = 3000;
 constexpr size_t FSEQ_SHARED_FRAME_BUFFER_SIZE = 1024;

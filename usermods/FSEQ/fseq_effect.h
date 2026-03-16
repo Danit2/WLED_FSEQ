@@ -30,7 +30,7 @@ static void mode_fseq_player(void) {
 
   const uint8_t segId = strip.getCurrSegmentId();
   const uint16_t fileCount = FSEQ_getFileIndexCount();
-  const uint16_t selectedIndex = SEGMENT.custom1;
+  const uint8_t selectedIndex = SEGMENT.custom3;
   const bool loop = SEGMENT.check1;
 
   if (fileCount == 0 || selectedIndex >= fileCount) {
@@ -73,4 +73,4 @@ static void mode_fseq_player(void) {
 }
 
 static const char _data_FX_MODE_FSEQ_PLAYER[] PROGMEM =
-    "FSEQ Player@,,Index,,,Loop;;;c1=0,o1=1";
+    "FSEQ Player@,,Index,,,Loop;;;c3=0,o1=1";
