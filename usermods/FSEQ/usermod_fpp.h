@@ -447,89 +447,38 @@ private:
                            float seconds = 0.0f,
                            IPAddress senderIP = IPAddress(0, 0, 0, 0)) {
     portENTER_CRITICAL(&fppMux);
-
-    const bool newHasFile = (fileName && fileName[0] != '\0');
-
-    // Keep a pending START alive until loop() has processed it.
-    // If more START/SYNC packets arrive before then, only refresh the target
-    // time/IP and optionally the filename.
-    if (pendingCommand == PENDING_START &&
-        (cmd == PENDING_START || cmd == PENDING_SYNC)) {
-      pendingSecondsElapsed = seconds;
-      lastFppSenderIP = senderIP;
-
-      if (newHasFile) {
-        memset(pendingFileName, 0, sizeof(pendingFileName));
-        const size_t len = strnlen(fileName, sizeof(pendingFileName) - 1);
-        memcpy(pendingFileName, fileName, len);
-      }
-
-      portEXIT_CRITICAL(&fppMux);
-      return;
-    }
-
     pendingCommand = cmd;
     pendingSecondsElapsed = seconds;
     lastFppSenderIP = senderIP;
-
-    if (cmd == PENDING_STOP || cmd == PENDING_BLANK) {
-      memset(pendingFileName, 0, sizeof(pendingFileName));
-    } else if (newHasFile) {
-      memset(pendingFileName, 0, sizeof(pendingFileName));
+    memset(pendingFileName, 0, sizeof(pendingFileName));
+    if (fileName && fileName[0] != '\0') {
       const size_t len = strnlen(fileName, sizeof(pendingFileName) - 1);
       memcpy(pendingFileName, fileName, len);
-    } else if (cmd == PENDING_START) {
-      // Never reuse an old filename for an explicit START if none was supplied.
-      memset(pendingFileName, 0, sizeof(pendingFileName));
     }
-    // For a SYNC without filename we intentionally keep the most recent pending
-    // filename so a late join can still start from the correct sequence.
-
     portEXIT_CRITICAL(&fppMux);
   }
 
   void processUdpPacket(AsyncUDPPacket packet) {
-    if (packet.length() < 7) return;
+    if (packet.length() < 5) return;
     if (packet.data()[0] != 'F' || packet.data()[1] != 'P' ||
         packet.data()[2] != 'P' || packet.data()[3] != 'D') return;
 
     uint8_t packetType = packet.data()[4];
     switch (packetType) {
     case CTRL_PKT_SYNC: {
-      const uint16_t extraDataLen =
-          (uint16_t)packet.data()[5] | ((uint16_t)packet.data()[6] << 8);
-      const size_t payloadLen = packet.length() - 7;
-      if (payloadLen < 10) {
+      const size_t baseSize = 17;
+      if (packet.length() <= baseSize) {
         DEBUG_PRINTLN(F("[FPP] Sync packet too short, ignoring"));
         break;
       }
-      if (extraDataLen != 0 && payloadLen < extraDataLen) {
-        DEBUG_PRINTLN(F("[FPP] Sync packet truncated, ignoring"));
-        break;
-      }
-
-      const uint8_t syncAction = packet.data()[7];
-      const uint8_t syncType = packet.data()[8];
-      if (syncType != 0x00) {
-        break;
-      }
-
+      uint8_t syncAction = packet.data()[7];
       float secondsElapsed = 0.0f;
       memcpy(&secondsElapsed, packet.data() + 13, sizeof(secondsElapsed));
-
-      const size_t filenameOffset = 17;
-      const size_t filenameBytes = packet.length() > filenameOffset
-                                       ? (packet.length() - filenameOffset)
-                                       : 0;
-      const size_t copyLen = min((size_t)64, filenameBytes);
+      size_t filenameOffset = 17;
+      size_t maxFilenameLen = min((size_t)64, packet.length() - filenameOffset);
       char safeFilename[65];
-      memset(safeFilename, 0, sizeof(safeFilename));
-      if (copyLen > 0) {
-        memcpy(safeFilename, packet.data() + filenameOffset, copyLen);
-        safeFilename[copyLen] = '\0';
-        const size_t realLen = strnlen(safeFilename, copyLen);
-        safeFilename[realLen] = '\0';
-      }
+      memcpy(safeFilename, packet.data() + filenameOffset, maxFilenameLen);
+      safeFilename[maxFilenameLen] = '\0';
 
       switch (syncAction) {
         case 0:
@@ -564,20 +513,11 @@ private:
                                const IPAddress &senderIP) {
     String normalized = fileName;
     if (normalized.length() == 0) {
-      if (FSEQPlayer::isPlaying()) {
-        normalized = "/" + FSEQPlayer::getFileName();
-      } else if (lastSequenceName[0] != '\0') {
-        normalized = "/" + String(lastSequenceName);
-      } else {
-        DEBUG_PRINTLN(F("[FPP] Cannot start realtime playback: no filename available"));
-        return;
-      }
+      if (lastSequenceName[0] == '\0') return;
+      normalized = "/" + String(lastSequenceName);
     } else if (!normalized.startsWith("/")) {
       normalized = "/" + normalized;
     }
-
-    DEBUG_PRINTF("[FPP] Start realtime playback: %s @ %.3fs\n",
-                 normalized.c_str(), secondsElapsed);
 
     rememberSyncProgress(normalized.c_str(), secondsElapsed);
     FSEQ_markFppControlActivity();
@@ -585,13 +525,6 @@ private:
     useMainSegmentOnly = false;
     realtimeLock(3000, REALTIME_MODE_FSEQ);
     FSEQPlayer::loadRecording(normalized.c_str(), secondsElapsed, true);
-
-    if (!FSEQPlayer::isPlaying()) {
-      DEBUG_PRINTF("[FPP] Failed to activate realtime playback for %s\n",
-                   normalized.c_str());
-      return;
-    }
-
     FSEQPlayer::renderRealtimeFrame();
   }
 
@@ -641,25 +574,26 @@ private:
           normalized = "/" + normalized;
         }
 
-        if (normalized.length() == 0) {
-          DEBUG_PRINTLN(F("[FPP] Ignoring SYNC without filename and without active playback"));
-          break;
-        }
-
-        const String wantedFileName = normalized.substring(1);
-        const String activeFileName = FSEQPlayer::getFileName();
-        if (!FSEQPlayer::isPlaying() ||
-            !activeFileName.equalsIgnoreCase(wantedFileName)) {
-          startRealtimeFppPlayback(normalized, seconds, senderIP);
-          break;
-        }
-
         rememberSyncProgress(normalized.c_str(), seconds);
         FSEQ_markFppControlActivity();
         realtimeIP = senderIP;
         useMainSegmentOnly = false;
         realtimeLock(3000, REALTIME_MODE_FSEQ);
-        FSEQPlayer::syncPlayback(seconds);
+
+        if (normalized.length() == 0) {
+          if (FSEQPlayer::isPlaying()) {
+            FSEQPlayer::syncPlayback(seconds);
+          }
+          break;
+        }
+
+        const String activeFileName = FSEQPlayer::getFileName();
+        if (!FSEQPlayer::isPlaying() ||
+            !activeFileName.equalsIgnoreCase(normalized.substring(1))) {
+          startRealtimeFppPlayback(normalized, seconds, senderIP);
+        } else {
+          FSEQPlayer::syncPlayback(seconds);
+        }
         break;
       }
       default:

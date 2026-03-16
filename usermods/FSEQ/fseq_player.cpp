@@ -12,10 +12,6 @@ FSEQPlayer::PlaybackState FSEQPlayer::realtimeState;
 FSEQPlayer::PlaybackState FSEQPlayer::segmentStates[MAX_NUM_SEGMENTS];
 
 namespace {
-// Keep the cache larger than the effect UI range.
-// The effect uses c3 (0..31) for easier local selection,
-// but FPP/file-name based playback must still be able to
-// find more files than that by name.
 constexpr uint16_t FSEQ_MAX_INDEXED_FILES = 128;
 constexpr uint32_t FSEQ_FPP_OVERRIDE_TIMEOUT_MS = 3000;
 constexpr size_t FSEQ_SHARED_FRAME_BUFFER_SIZE = 1024;
@@ -212,6 +208,16 @@ void FSEQPlayer::scheduleNextFrame(PlaybackState &state) {
   const uint32_t step = state.file_header.step_time;
   if (step == 0) {
     state.next_time = 0;
+    return;
+  }
+
+  // Normal segment playback stays time-based.
+  // Realtime/FPP playback must continue from the local scheduler "now",
+  // otherwise a late join after boot can schedule the next frame far in the
+  // future and render only a single frame.
+  if (&state == &realtimeState) {
+    const uint32_t baseNow = state.now ? state.now : millis();
+    state.next_time = baseNow + step;
     return;
   }
 
@@ -526,8 +532,18 @@ void FSEQPlayer::loadRecordingIntoState(PlaybackState &state, const char *filepa
   state.syncErrorFilteredMs = 0.0f;
   state.syncSlewMs = 0.0f;
   state.syncCarryMs = 0.0f;
-  alignFrameToLocalTime(state, now);
-  scheduleNextFrame(state);
+
+  if (&state == &realtimeState) {
+    // Realtime/FPP starts from the requested frame immediately and then keeps
+    // running from the local scheduler. Do not re-align it to an absolute
+    // playback_start_time here, otherwise a late join can snap back to frame 0
+    // or wait until local millis() catches up.
+    state.now = now;
+    state.next_time = now;
+  } else {
+    alignFrameToLocalTime(state, now);
+    scheduleNextFrame(state);
+  }
 }
 
 void FSEQPlayer::clearPlaybackState(PlaybackState &state) {
@@ -564,14 +580,22 @@ float FSEQPlayer::getElapsedSeconds(const PlaybackState &state) {
   const uint32_t step = state.file_header.step_time;
   if (step == 0) return 0;
 
-  uint32_t now = millis();
   uint32_t elapsedMs = 0;
-  if (now >= state.playback_start_time) {
-    elapsedMs = now - state.playback_start_time;
-  } else if (state.secondsElapsed > 0.0f) {
-    elapsedMs = (uint32_t)(state.secondsElapsed * 1000.0f);
-  } else {
+  if (&state == &realtimeState) {
     elapsedMs = state.frame * step;
+    if (state.secondsElapsed > 0.0f) {
+      const uint32_t hintedMs = (uint32_t)(state.secondsElapsed * 1000.0f);
+      if (hintedMs > elapsedMs) elapsedMs = hintedMs;
+    }
+  } else {
+    uint32_t now = millis();
+    if (state.playback_start_time != 0 && now >= state.playback_start_time) {
+      elapsedMs = now - state.playback_start_time;
+    } else if (state.secondsElapsed > 0.0f) {
+      elapsedMs = (uint32_t)(state.secondsElapsed * 1000.0f);
+    } else {
+      elapsedMs = state.frame * step;
+    }
   }
 
   const uint32_t maxMs = (state.file_header.frame_count - 1U) * step;
@@ -660,8 +684,10 @@ void FSEQPlayer::renderRealtimeFrame() {
     return;
   }
 
-  alignFrameToLocalTime(state, state.now);
   playNextRealtimeFrame(state);
+  if (state.file_header.step_time > 0) {
+    state.secondsElapsed = ((float)state.frame * (float)state.file_header.step_time) / 1000.0f;
+  }
   if (!useMainSegmentOnly) strip.show();
   else strip.trigger();
 }
@@ -686,82 +712,67 @@ void FSEQPlayer::syncPlayback(float secondsElapsed) {
   const float maxMs = (float)(state.file_header.frame_count - 1U) * stepMs;
   targetMs = constrain(targetMs, 0.0f, maxMs);
   state.secondsElapsed = targetMs / 1000.0f;
+  state.now = now;
 
-  bool timingAdjusted = false;
-  if (state.playback_start_time == 0) {
-    const uint32_t targetMsU32 = (uint32_t)targetMs;
-    state.playback_start_time = (targetMsU32 > now) ? 0U : (now - targetMsU32);
-    timingAdjusted = true;
+  // Keep playback_start_time only as a status hint. Realtime/FPP scheduling is
+  // handled from local next_time, not from absolute sequence time since boot.
+  const uint32_t targetMsU32 = (uint32_t)targetMs;
+  state.playback_start_time = (targetMsU32 > now) ? 0U : (now - targetMsU32);
+
+  uint32_t targetFrame = (uint32_t)(targetMs / stepMs);
+  if (targetFrame >= state.file_header.frame_count) {
+    targetFrame = state.file_header.frame_count - 1U;
   }
 
-  const float localMs = (float)(now - state.playback_start_time);
-  const float errorMs = targetMs - localMs;  // >0 = wir sind hinten
+  const int32_t frameDiff = (int32_t)targetFrame - (int32_t)state.frame;
+  const float errorMs = ((float)frameDiff) * stepMs;
 
-  if (fabsf(errorMs) >= 150.0f) {
-    uint32_t targetFrame = (uint32_t)(targetMs / stepMs);
-    if (targetFrame >= state.file_header.frame_count) {
-      targetFrame = state.file_header.frame_count - 1U;
-    }
-
+  // Late join / large error: jump directly to the correct frame and make it
+  // render immediately. After that continue with the local frame scheduler.
+  if (abs(frameDiff) >= 3 || fabsf(errorMs) >= 150.0f) {
     state.frame = targetFrame;
     state.frame_data_offset =
         state.file_header.channel_data_offset +
         ((uint32_t)state.file_header.channel_count * state.frame);
     state.frame_position_dirty = true;
-
-    const uint32_t targetMsU32 = (uint32_t)targetMs;
-    state.playback_start_time = (targetMsU32 > now) ? 0U : (now - targetMsU32);
     state.syncErrorFilteredMs = 0.0f;
     state.syncSlewMs = 0.0f;
     state.syncCarryMs = 0.0f;
-    scheduleNextFrame(state);
+    state.next_time = now;
 
-    DEBUG_PRINTF("[FSEQ] HARD Sync -> frame=%lu err=%.2fms\n",
-                 (unsigned long)targetFrame, errorMs);
+    DEBUG_PRINTF("[FSEQ] HARD Sync -> frame=%lu diff=%ld err=%.2fms\n",
+                 (unsigned long)targetFrame,
+                 (long)frameDiff,
+                 errorMs);
     return;
   }
 
-  if (fabsf(errorMs) < 1.0f) {
-    state.syncErrorFilteredMs *= 0.92f;
-    state.syncSlewMs *= 0.85f;
-    return;
-  }
-
+  // Small errors: keep the current frame flow and only move the local scheduler
+  // slightly forward/backward.
   state.syncErrorFilteredMs =
-      state.syncErrorFilteredMs * 0.92f + errorMs * 0.08f;
+      state.syncErrorFilteredMs * 0.85f + errorMs * 0.15f;
 
-  float desiredSlewMs = state.syncErrorFilteredMs * 0.02f;
-  desiredSlewMs = constrain(desiredSlewMs, -0.75f, 0.75f);
+  float desiredAdjustMs = state.syncErrorFilteredMs * 0.25f;
+  desiredAdjustMs = constrain(desiredAdjustMs, -stepMs * 0.5f, stepMs * 0.5f);
 
-  state.syncSlewMs = state.syncSlewMs * 0.85f + desiredSlewMs * 0.15f;
-  state.syncCarryMs += state.syncSlewMs;
+  state.syncSlewMs = state.syncSlewMs * 0.7f + desiredAdjustMs * 0.3f;
 
-  int32_t adjustMs = 0;
-  if (state.syncCarryMs >= 1.0f) {
-    adjustMs = (int32_t)floorf(state.syncCarryMs);
-  } else if (state.syncCarryMs <= -1.0f) {
-    adjustMs = (int32_t)ceilf(state.syncCarryMs);
-  }
-  state.syncCarryMs -= (float)adjustMs;
+  int32_t nextDelay = (int32_t)stepMs - (int32_t)lroundf(state.syncSlewMs);
+  const int32_t minDelay = 1;
+  const int32_t maxDelay = (int32_t)(stepMs * 2.0f);
+  if (nextDelay < minDelay) nextDelay = minDelay;
+  if (nextDelay > maxDelay) nextDelay = maxDelay;
 
-  if (adjustMs != 0) {
-    int32_t shiftedStart = (int32_t)state.playback_start_time - adjustMs;
-    if (shiftedStart < 0) shiftedStart = 0;
-    state.playback_start_time = (uint32_t)shiftedStart;
-    timingAdjusted = true;
-  }
-
-  if (timingAdjusted) {
-    alignFrameToLocalTime(state, now);
-  }
+  state.next_time = now + (uint32_t)nextDelay;
 
   if ((uint32_t)(now - gLastSoftSyncDebugMs) >= FSEQ_SYNC_DEBUG_INTERVAL_MS) {
     gLastSoftSyncDebugMs = now;
-    DEBUG_PRINTF("[FSEQ] Soft Sync err=%.2fms filt=%.2fms slew=%.3fms adj=%ldms\n",
+    DEBUG_PRINTF("[FSEQ] Soft Sync target=%lu frame=%lu diff=%ld err=%.2fms next_in=%ldms\n",
+                 (unsigned long)targetFrame,
+                 (unsigned long)state.frame,
+                 (long)frameDiff,
                  errorMs,
-                 state.syncErrorFilteredMs,
-                 state.syncSlewMs,
-                 (long)adjustMs);
+                 (long)nextDelay);
   }
 }
 
