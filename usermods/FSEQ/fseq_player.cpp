@@ -222,7 +222,8 @@ void FSEQPlayer::resetTimingFromCurrentFrame(PlaybackState &state, uint32_t now)
     return;
   }
 
-  state.playback_start_time = now - (state.frame * step);
+  const uint32_t frameOffsetMs = state.frame * step;
+  state.playback_start_time = (frameOffsetMs > now) ? 0U : (now - frameOffsetMs);
   scheduleNextFrame(state);
 }
 
@@ -243,8 +244,8 @@ void FSEQPlayer::alignFrameToLocalTime(PlaybackState &state, uint32_t now) {
   }
 
   const uint32_t maxFrame = state.file_header.frame_count - 1U;
-  uint32_t localFrame = 0;
-  if (now > state.playback_start_time) {
+  uint32_t localFrame = state.frame;
+  if (now >= state.playback_start_time) {
     localFrame = (now - state.playback_start_time) / step;
   }
   if (localFrame > maxFrame) localFrame = maxFrame;
@@ -513,7 +514,8 @@ void FSEQPlayer::loadRecordingIntoState(PlaybackState &state, const char *filepa
   state.frame_position_dirty = true;
 
   const uint32_t now = millis();
-  state.playback_start_time = now - (uint32_t)startMs;
+  const uint32_t startMsU32 = (uint32_t)startMs;
+  state.playback_start_time = (startMsU32 > now) ? 0U : (now - startMsU32);
 
   state.secondsElapsed = secondsElapsed;
   if (&state == &realtimeState) gLastRealtimeLockMs = 0;
@@ -560,7 +562,7 @@ float FSEQPlayer::getElapsedSeconds(const PlaybackState &state) {
 
   uint32_t now = millis();
   uint32_t elapsedMs = 0;
-  if (state.playback_start_time != 0 && now > state.playback_start_time) {
+  if (now >= state.playback_start_time) {
     elapsedMs = now - state.playback_start_time;
   } else if (state.secondsElapsed > 0.0f) {
     elapsedMs = (uint32_t)(state.secondsElapsed * 1000.0f);
@@ -683,7 +685,8 @@ void FSEQPlayer::syncPlayback(float secondsElapsed) {
 
   bool timingAdjusted = false;
   if (state.playback_start_time == 0) {
-    state.playback_start_time = now - (uint32_t)targetMs;
+    const uint32_t targetMsU32 = (uint32_t)targetMs;
+    state.playback_start_time = (targetMsU32 > now) ? 0U : (now - targetMsU32);
     timingAdjusted = true;
   }
 
@@ -702,7 +705,8 @@ void FSEQPlayer::syncPlayback(float secondsElapsed) {
         ((uint32_t)state.file_header.channel_count * state.frame);
     state.frame_position_dirty = true;
 
-    state.playback_start_time = now - (uint32_t)targetMs;
+    const uint32_t targetMsU32 = (uint32_t)targetMs;
+    state.playback_start_time = (targetMsU32 > now) ? 0U : (now - targetMsU32);
     state.syncErrorFilteredMs = 0.0f;
     state.syncSlewMs = 0.0f;
     state.syncCarryMs = 0.0f;
