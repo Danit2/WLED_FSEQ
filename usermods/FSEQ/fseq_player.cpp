@@ -686,109 +686,82 @@ void FSEQPlayer::syncPlayback(float secondsElapsed) {
   const float maxMs = (float)(state.file_header.frame_count - 1U) * stepMs;
   targetMs = constrain(targetMs, 0.0f, maxMs);
   state.secondsElapsed = targetMs / 1000.0f;
-  state.now = now;
 
-  // Keep playback_start_time only as a status hint for UI/reporting.
-  const uint32_t targetMsU32 = (uint32_t)targetMs;
-  state.playback_start_time = (targetMsU32 > now) ? 0U : (now - targetMsU32);
-
-  uint32_t targetFrame = (uint32_t)(targetMs / stepMs);
-  if (targetFrame >= state.file_header.frame_count) {
-    targetFrame = state.file_header.frame_count - 1U;
+  bool timingAdjusted = false;
+  if (state.playback_start_time == 0) {
+    const uint32_t targetMsU32 = (uint32_t)targetMs;
+    state.playback_start_time = (targetMsU32 > now) ? 0U : (now - targetMsU32);
+    timingAdjusted = true;
   }
 
-  const int32_t frameDiff = (int32_t)targetFrame - (int32_t)state.frame;
-  const float errorMs = ((float)frameDiff) * stepMs;
-  const int32_t absFrameDiff = abs(frameDiff);
-  const float absErrorMs = fabsf(errorMs);
+  const float localMs = (float)(now - state.playback_start_time);
+  const float errorMs = targetMs - localMs;  // >0 = wir sind hinten
 
-  // Large mismatch or late join: jump directly to the correct frame and let
-  // the next render happen now. This keeps late-join reliable.
-  if (absFrameDiff >= 3 || absErrorMs >= 150.0f) {
+  if (fabsf(errorMs) >= 150.0f) {
+    uint32_t targetFrame = (uint32_t)(targetMs / stepMs);
+    if (targetFrame >= state.file_header.frame_count) {
+      targetFrame = state.file_header.frame_count - 1U;
+    }
+
     state.frame = targetFrame;
     state.frame_data_offset =
         state.file_header.channel_data_offset +
         ((uint32_t)state.file_header.channel_count * state.frame);
     state.frame_position_dirty = true;
+
+    const uint32_t targetMsU32 = (uint32_t)targetMs;
+    state.playback_start_time = (targetMsU32 > now) ? 0U : (now - targetMsU32);
     state.syncErrorFilteredMs = 0.0f;
     state.syncSlewMs = 0.0f;
     state.syncCarryMs = 0.0f;
-    state.next_time = now;
+    scheduleNextFrame(state);
 
-    DEBUG_PRINTF("[FSEQ] HARD Sync -> frame=%lu diff=%ld err=%.2fms\n",
-                 (unsigned long)targetFrame,
-                 (long)frameDiff,
-                 errorMs);
+    DEBUG_PRINTF("[FSEQ] HARD Sync -> frame=%lu err=%.2fms\n",
+                 (unsigned long)targetFrame, errorMs);
     return;
   }
 
-  // Normal running sync: keep the local frame scheduler but guide it with FPP
-  // elapsed time. This keeps motion smooth while staying tightly aligned.
-  const float filterAlpha = (absFrameDiff >= 2) ? 0.30f : 0.18f;
+  if (fabsf(errorMs) < 1.0f) {
+    state.syncErrorFilteredMs *= 0.92f;
+    state.syncSlewMs *= 0.85f;
+    return;
+  }
+
   state.syncErrorFilteredMs =
-      state.syncErrorFilteredMs * (1.0f - filterAlpha) + errorMs * filterAlpha;
+      state.syncErrorFilteredMs * 0.92f + errorMs * 0.08f;
 
-  float desiredSlewMs = state.syncErrorFilteredMs * 0.35f;
-  desiredSlewMs = constrain(desiredSlewMs, -stepMs * 0.45f, stepMs * 0.45f);
+  float desiredSlewMs = state.syncErrorFilteredMs * 0.02f;
+  desiredSlewMs = constrain(desiredSlewMs, -0.75f, 0.75f);
 
-  const float slewAlpha = (absErrorMs >= (stepMs * 1.5f)) ? 0.45f : 0.22f;
-  state.syncSlewMs =
-      state.syncSlewMs * (1.0f - slewAlpha) + desiredSlewMs * slewAlpha;
-
-  // Preserve sub-millisecond corrections so long-term average timing stays tight.
+  state.syncSlewMs = state.syncSlewMs * 0.85f + desiredSlewMs * 0.15f;
   state.syncCarryMs += state.syncSlewMs;
-  int32_t appliedAdjustMs = (int32_t)state.syncCarryMs;
-  state.syncCarryMs -= (float)appliedAdjustMs;
 
-  // Medium error helper: very occasionally skip/repeat one frame instead of
-  // letting visible drift accumulate, but only when the error is clearly larger
-  // than the slew path should handle quietly.
-  if (absFrameDiff == 2 && absErrorMs >= (stepMs * 1.5f)) {
-    if (frameDiff > 0) {
-      state.frame++;
-    } else if (frameDiff < 0 && state.frame > 0) {
-      state.frame--;
-    }
+  int32_t adjustMs = 0;
+  if (state.syncCarryMs >= 1.0f) {
+    adjustMs = (int32_t)floorf(state.syncCarryMs);
+  } else if (state.syncCarryMs <= -1.0f) {
+    adjustMs = (int32_t)ceilf(state.syncCarryMs);
+  }
+  state.syncCarryMs -= (float)adjustMs;
 
-    if (state.frame >= state.file_header.frame_count) {
-      state.frame = state.file_header.frame_count - 1U;
-    }
-
-    state.frame_data_offset =
-        state.file_header.channel_data_offset +
-        ((uint32_t)state.file_header.channel_count * state.frame);
-    state.frame_position_dirty = true;
-    state.syncErrorFilteredMs *= 0.5f;
-    state.syncSlewMs *= 0.5f;
-    state.syncCarryMs = 0.0f;
-    state.next_time = now;
-
-    DEBUG_PRINTF("[FSEQ] Frame Assist -> frame=%lu diff=%ld err=%.2fms\n",
-                 (unsigned long)state.frame,
-                 (long)frameDiff,
-                 errorMs);
-    return;
+  if (adjustMs != 0) {
+    int32_t shiftedStart = (int32_t)state.playback_start_time - adjustMs;
+    if (shiftedStart < 0) shiftedStart = 0;
+    state.playback_start_time = (uint32_t)shiftedStart;
+    timingAdjusted = true;
   }
 
-  int32_t nextDelay = (int32_t)lroundf(stepMs - (float)appliedAdjustMs);
-  const int32_t minDelay = max(1, (int32_t)lroundf(stepMs * 0.35f));
-  const int32_t maxDelay = max(minDelay + 1, (int32_t)lroundf(stepMs * 1.65f));
-  if (nextDelay < minDelay) nextDelay = minDelay;
-  if (nextDelay > maxDelay) nextDelay = maxDelay;
-
-  state.next_time = now + (uint32_t)nextDelay;
+  if (timingAdjusted) {
+    alignFrameToLocalTime(state, now);
+  }
 
   if ((uint32_t)(now - gLastSoftSyncDebugMs) >= FSEQ_SYNC_DEBUG_INTERVAL_MS) {
     gLastSoftSyncDebugMs = now;
-    DEBUG_PRINTF("[FSEQ] Soft Sync target=%lu frame=%lu diff=%ld err=%.2fms filt=%.2f slew=%.2f next_in=%ldms\n",
-                 (unsigned long)targetFrame,
-                 (unsigned long)state.frame,
-                 (long)frameDiff,
+    DEBUG_PRINTF("[FSEQ] Soft Sync err=%.2fms filt=%.2fms slew=%.3fms adj=%ldms\n",
                  errorMs,
                  state.syncErrorFilteredMs,
                  state.syncSlewMs,
-                 (long)nextDelay);
+                 (long)adjustMs);
   }
 }
-
 
