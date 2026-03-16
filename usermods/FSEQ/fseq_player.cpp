@@ -15,9 +15,11 @@ namespace {
 constexpr uint16_t FSEQ_MAX_INDEXED_FILES = 128;
 constexpr uint32_t FSEQ_FPP_OVERRIDE_TIMEOUT_MS = 3000;
 constexpr size_t FSEQ_SHARED_FRAME_BUFFER_SIZE = 1024;
-constexpr uint32_t FSEQ_SYNC_DEBUG_INTERVAL_MS = 1000;
+constexpr uint32_t FSEQ_SYNC_DEBUG_INTERVAL_MS = 5000;
+constexpr uint32_t FSEQ_REALTIME_LOCK_REFRESH_MS = 1000;
 
 uint32_t gLastSoftSyncDebugMs = 0;
+uint32_t gLastRealtimeLockMs = 0;
 
 String gIndexedFseqFiles[FSEQ_MAX_INDEXED_FILES];
 uint16_t gIndexedFseqFileCount = 0;
@@ -299,6 +301,14 @@ void FSEQPlayer::processFrameDataForSegment(PlaybackState &state, Segment &segme
   state.frame_data_offset += state.file_header.channel_count;
 }
 
+static inline void refreshRealtimeLockIfNeeded(uint32_t now) {
+  if (gLastRealtimeLockMs == 0 ||
+      (uint32_t)(now - gLastRealtimeLockMs) >= FSEQ_REALTIME_LOCK_REFRESH_MS) {
+    realtimeLock(3000, REALTIME_MODE_FSEQ);
+    gLastRealtimeLockMs = now;
+  }
+}
+
 void FSEQPlayer::processFrameDataRealtime(PlaybackState &state) {
   const uint32_t packetLength = state.file_header.channel_count;
   const uint16_t totalLen = strip.getLengthTotal();
@@ -338,7 +348,7 @@ void FSEQPlayer::processFrameDataRealtime(PlaybackState &state) {
 
   if (!skipRemainingFrameData(state, packetLength - bytesToRender)) return;
 
-  realtimeLock(3000, REALTIME_MODE_FSEQ);
+  refreshRealtimeLockIfNeeded(state.now);
   state.frame_data_offset += state.file_header.channel_count;
 }
 
@@ -506,6 +516,7 @@ void FSEQPlayer::loadRecordingIntoState(PlaybackState &state, const char *filepa
   state.playback_start_time = now - (uint32_t)startMs;
 
   state.secondsElapsed = secondsElapsed;
+  if (&state == &realtimeState) gLastRealtimeLockMs = 0;
   state.syncErrorFilteredMs = 0.0f;
   state.syncSlewMs = 0.0f;
   state.syncCarryMs = 0.0f;
@@ -528,6 +539,7 @@ void FSEQPlayer::clearPlaybackState(PlaybackState &state) {
   state.syncSlewMs = 0.0f;
   state.syncCarryMs = 0.0f;
   if (state.recordingFile) state.recordingFile.close();
+  if (&state == &realtimeState) gLastRealtimeLockMs = 0;
   state.currentFileName = "";
 }
 
@@ -550,6 +562,8 @@ float FSEQPlayer::getElapsedSeconds(const PlaybackState &state) {
   uint32_t elapsedMs = 0;
   if (state.playback_start_time != 0 && now > state.playback_start_time) {
     elapsedMs = now - state.playback_start_time;
+  } else if (state.secondsElapsed > 0.0f) {
+    elapsedMs = (uint32_t)(state.secondsElapsed * 1000.0f);
   } else {
     elapsedMs = state.frame * step;
   }
@@ -601,10 +615,13 @@ void FSEQPlayer::renderSegmentFrame(uint8_t segmentId, Segment &segment) {
     if (stopBecauseAtTheEnd(state)) return;
   }
 
-  alignFrameToLocalTime(state, state.now);
+  const bool forceRender = state.frame_position_dirty;
+  if (!forceRender && state.next_time != 0 &&
+      (int32_t)(state.now - state.next_time) < 0) {
+    return;
+  }
 
-  if (!state.frame_position_dirty &&
-      state.next_time != 0 && (int32_t)(state.now - state.next_time) < 0) return;
+  alignFrameToLocalTime(state, state.now);
   playNextRecordingFrameForSegment(state, segment);
 }
 
@@ -631,14 +648,13 @@ void FSEQPlayer::renderRealtimeFrame() {
     if (stopBecauseAtTheEnd(state)) return;
   }
 
-  alignFrameToLocalTime(state, state.now);
-
-  if (!state.frame_position_dirty &&
-      state.next_time != 0 &&
+  const bool forceRender = state.frame_position_dirty;
+  if (!forceRender && state.next_time != 0 &&
       (int32_t)(state.now - state.next_time) < 0) {
     return;
   }
 
+  alignFrameToLocalTime(state, state.now);
   playNextRealtimeFrame(state);
   if (!useMainSegmentOnly) strip.show();
   else strip.trigger();
@@ -663,10 +679,12 @@ void FSEQPlayer::syncPlayback(float secondsElapsed) {
   float targetMs = secondsElapsed * 1000.0f;
   const float maxMs = (float)(state.file_header.frame_count - 1U) * stepMs;
   targetMs = constrain(targetMs, 0.0f, maxMs);
+  state.secondsElapsed = targetMs / 1000.0f;
 
+  bool timingAdjusted = false;
   if (state.playback_start_time == 0) {
     state.playback_start_time = now - (uint32_t)targetMs;
-    alignFrameToLocalTime(state, now);
+    timingAdjusted = true;
   }
 
   const float localMs = (float)(now - state.playback_start_time);
@@ -722,9 +740,12 @@ void FSEQPlayer::syncPlayback(float secondsElapsed) {
     int32_t shiftedStart = (int32_t)state.playback_start_time - adjustMs;
     if (shiftedStart < 0) shiftedStart = 0;
     state.playback_start_time = (uint32_t)shiftedStart;
+    timingAdjusted = true;
   }
 
-  alignFrameToLocalTime(state, now);
+  if (timingAdjusted) {
+    alignFrameToLocalTime(state, now);
+  }
 
   if ((uint32_t)(now - gLastSoftSyncDebugMs) >= FSEQ_SYNC_DEBUG_INTERVAL_MS) {
     gLastSoftSyncDebugMs = now;
