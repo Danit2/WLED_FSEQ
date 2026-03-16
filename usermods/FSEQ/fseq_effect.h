@@ -73,4 +73,4 @@ static void mode_fseq_player(void) {
 }
 
 static const char _data_FX_MODE_FSEQ_PLAYER[] PROGMEM =
-    "FSEQ Player@,,Index,,,Loop;;;c3=0,o1=1";
+    "FSEQ Player@,,,,Index,Loop;;;c3=0,o1=1";
