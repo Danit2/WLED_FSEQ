@@ -55,7 +55,8 @@ private:
     float secondsElapsed = 0.0f;
     int32_t recordingRepeats = RECORDING_REPEAT_DEFAULT;
     uint32_t now = 0;
-    uint32_t next_time = 0;
+    uint32_t next_time = 0;  // scheduler only
+    uint32_t playback_start_time = 0;
     uint32_t frame = 0;
     uint32_t file_size = 0;
     uint32_t frame_data_offset = 0;
@@ -85,6 +86,8 @@ private:
   static bool ensureFrameDataPosition(PlaybackState &state);
   static bool skipRemainingFrameData(PlaybackState &state, uint32_t bytesToSkip);
   static void scheduleNextFrame(PlaybackState &state);
+  static void resetTimingFromCurrentFrame(PlaybackState &state, uint32_t now);
+  static void alignFrameToLocalTime(PlaybackState &state, uint32_t now);
   static void playNextRecordingFrameForSegment(PlaybackState &state, Segment &segment);
   static void playNextRealtimeFrame(PlaybackState &state);
   static void loadRecordingIntoState(PlaybackState &state, const char *filepath,
