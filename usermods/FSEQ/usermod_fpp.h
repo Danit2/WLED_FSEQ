@@ -41,7 +41,10 @@ public:
       buffer += toCopy;
       size -= toCopy;
       total += toCopy;
-      if (_offset == _capacity) flush();
+      if (_offset == _capacity) {
+        _upstream.write(_buffer, _offset);
+        _offset = 0;
+      }
     }
     return total;
   }
@@ -168,7 +171,12 @@ private:
     doc["fppd"] = "running";
     doc["current_song"] = "";
 
-    if (FSEQPlayer::isPlaying()) {
+    const bool playbackActive = FSEQPlayer::isPlaying() ||
+                                FSEQ_isFppOverrideActive() ||
+                                (realtimeMode == REALTIME_MODE_FSEQ &&
+                                 FSEQPlayer::getFileName().length() > 0);
+
+    if (playbackActive) {
       String fileName = FSEQPlayer::getFileName();
       float elapsedF = FSEQPlayer::getElapsedSeconds();
       uint32_t elapsed = (uint32_t)elapsedF;
@@ -391,7 +399,7 @@ private:
   }
 
   void queuePendingCommand(PendingCommandType cmd,
-                           const String &fileName = "",
+                           const char *fileName = nullptr,
                            float seconds = 0.0f,
                            IPAddress senderIP = IPAddress(0, 0, 0, 0)) {
     portENTER_CRITICAL(&fppMux);
@@ -399,10 +407,9 @@ private:
     pendingSecondsElapsed = seconds;
     lastFppSenderIP = senderIP;
     memset(pendingFileName, 0, sizeof(pendingFileName));
-    if (fileName.length() > 0) {
-      String tmp = fileName;
-      if (tmp.length() > 64) tmp = tmp.substring(0, 64);
-      memcpy(pendingFileName, tmp.c_str(), tmp.length());
+    if (fileName && fileName[0] != '\0') {
+      const size_t len = strnlen(fileName, 64);
+      memcpy(pendingFileName, fileName, len);
     }
     portEXIT_CRITICAL(&fppMux);
   }
@@ -431,13 +438,13 @@ private:
 
       switch (syncAction) {
         case 0:
-          queuePendingCommand(PENDING_START, String(safeFilename), secondsElapsed, packet.remoteIP());
+          queuePendingCommand(PENDING_START, safeFilename, secondsElapsed, packet.remoteIP());
           break;
         case 1:
           queuePendingCommand(PENDING_STOP);
           break;
         case 2:
-          queuePendingCommand(PENDING_SYNC, String(safeFilename), secondsElapsed, packet.remoteIP());
+          queuePendingCommand(PENDING_SYNC, safeFilename, secondsElapsed, packet.remoteIP());
           break;
         default:
           break;
@@ -455,12 +462,14 @@ private:
     }
   }
 
-  void startRealtimeFppPlayback(const String &fileName, float secondsElapsed) {
+  void startRealtimeFppPlayback(const String &fileName,
+                               float secondsElapsed,
+                               const IPAddress &senderIP) {
     String normalized = fileName;
     if (!normalized.startsWith("/")) normalized = "/" + normalized;
 
     FSEQ_markFppControlActivity();
-    realtimeIP = lastFppSenderIP;
+    realtimeIP = senderIP;
     useMainSegmentOnly = false;
     realtimeLock(3000, REALTIME_MODE_FSEQ);
     FSEQPlayer::loadRecording(normalized.c_str(), secondsElapsed, true);
@@ -477,6 +486,7 @@ private:
     PendingCommandType cmd;
     char fileName[65];
     float seconds;
+    IPAddress senderIP;
 
     portENTER_CRITICAL(&fppMux);
     cmd = pendingCommand;
@@ -487,12 +497,13 @@ private:
     pendingCommand = PENDING_NONE;
     memcpy(fileName, pendingFileName, sizeof(fileName));
     seconds = pendingSecondsElapsed;
+    senderIP = lastFppSenderIP;
     portEXIT_CRITICAL(&fppMux);
 
     String fn = String(fileName);
     switch (cmd) {
       case PENDING_START:
-        startRealtimeFppPlayback(fn, seconds);
+        startRealtimeFppPlayback(fn, seconds, senderIP);
         break;
       case PENDING_STOP:
       case PENDING_BLANK:
@@ -502,11 +513,11 @@ private:
         String normalized = fn;
         if (!normalized.startsWith("/")) normalized = "/" + normalized;
         FSEQ_markFppControlActivity();
-        realtimeIP = Network.localIP();
+        realtimeIP = senderIP;
         useMainSegmentOnly = false;
         realtimeLock(3000, REALTIME_MODE_FSEQ);
         if (!FSEQPlayer::isPlaying() || !FSEQPlayer::getFileName().equalsIgnoreCase(normalized.substring(1))) {
-          startRealtimeFppPlayback(normalized, seconds);
+          startRealtimeFppPlayback(normalized, seconds, senderIP);
         } else {
           FSEQPlayer::syncPlayback(seconds);
         }
@@ -624,7 +635,11 @@ public:
 
     startUdpIfNeeded();
 
-    if (udpStarted && wifiNow == WL_CONNECTED) {
+    const bool pauseDiscovery = FSEQ_isFppOverrideActive() ||
+                                (realtimeMode == REALTIME_MODE_FSEQ &&
+                                 FSEQPlayer::isPlaying());
+
+    if (udpStarted && wifiNow == WL_CONNECTED && !pauseDiscovery) {
       if (announceBurstActive &&
           (lastAnnounceBurstTime == 0 ||
            millis() - lastAnnounceBurstTime >= announceBurstInterval)) {
