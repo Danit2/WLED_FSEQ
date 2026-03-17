@@ -15,6 +15,29 @@ void FSEQ_clearFppOverride();
 bool FSEQ_isFppOverrideActive();
 void FSEQ_invalidateFileIndexCache();
 
+class UsermodFPP;
+
+inline UsermodFPP *&FPP_usermodInstance() {
+  static UsermodFPP *instance = nullptr;
+  return instance;
+}
+
+inline void FPP_write16(uint8_t *buffer, uint16_t value) {
+  buffer[0] = value & 0xFF;
+  buffer[1] = (value >> 8) & 0xFF;
+}
+
+inline void FPP_write32(uint8_t *buffer, uint32_t value) {
+  buffer[0] = value & 0xFF;
+  buffer[1] = (value >> 8) & 0xFF;
+  buffer[2] = (value >> 16) & 0xFF;
+  buffer[3] = (value >> 24) & 0xFF;
+}
+
+bool FPP_sendEffectSyncMessage(uint8_t action, const String &fileName,
+                               uint32_t currentFrame, float secondsElapsed,
+                               bool sendMulticast, bool sendBroadcast);
+
 class WriteBufferingStream : public Stream {
 public:
   WriteBufferingStream(Stream &upstream, size_t capacity)
@@ -71,6 +94,9 @@ private:
 
 class UsermodFPP : public Usermod {
 private:
+  friend bool FPP_sendEffectSyncMessage(uint8_t action, const String &fileName,
+                                        uint32_t currentFrame, float secondsElapsed,
+                                        bool sendMulticast, bool sendBroadcast);
   AsyncUDP udpListen;
   AsyncUDP udpMulticast;
   bool udpListenStarted = false;
@@ -344,6 +370,17 @@ private:
     return broadcast;
   }
 
+  AsyncUDP *getTxUdp() {
+    if (udpListenStarted) return &udpListen;
+    if (udpMulticastStarted) return &udpMulticast;
+    return nullptr;
+  }
+
+  bool sendUdpPacket(const uint8_t *data, size_t len, const IPAddress &destination) {
+    AsyncUDP *txUdp = getTxUdp();
+    return txUdp ? txUdp->writeTo(data, len, destination, udpPort) : false;
+  }
+
   void stopUdpListeners() {
     if (udpListenStarted) udpListen.close();
     if (udpMulticastStarted) udpMulticast.close();
@@ -388,6 +425,57 @@ private:
     DEBUG_PRINTLN(F("[FPP] Discovery listeners active"));
   }
 
+  bool sendSyncMessage(uint8_t action, const String &fileName,
+                       uint32_t currentFrame, float secondsElapsed,
+                       bool sendMulticast, bool sendBroadcast) {
+    if (!udpStarted || WiFi.status() != WL_CONNECTED) return false;
+    if (!sendMulticast && !sendBroadcast) return false;
+
+    char filename[65];
+    memset(filename, 0, sizeof(filename));
+    const String normalized = fileName.startsWith("/") ? fileName.substring(1) : fileName;
+    const size_t fileLen = min(strlen(normalized.c_str()), sizeof(filename) - 1);
+    if (fileLen > 0) {
+      memcpy(filename, normalized.c_str(), fileLen);
+      filename[fileLen] = '\0';
+    }
+
+    const uint16_t payloadLen = 10 + (uint16_t)fileLen + 1;
+    const size_t packetLen = 7 + payloadLen;
+    uint8_t packet[7 + 10 + 65];
+    memset(packet, 0, sizeof(packet));
+
+    packet[0] = 'F';
+    packet[1] = 'P';
+    packet[2] = 'P';
+    packet[3] = 'D';
+    packet[4] = CTRL_PKT_SYNC;
+    FPP_write16(packet + 5, payloadLen);
+    packet[7] = action;
+    packet[8] = 0x00;
+    FPP_write32(packet + 9, currentFrame);
+    memcpy(packet + 13, &secondsElapsed, sizeof(secondsElapsed));
+    memcpy(packet + 17, filename, fileLen);
+    packet[17 + fileLen] = '\0';
+
+    bool sent = false;
+    if (sendBroadcast) {
+      const IPAddress subnetBroadcast = getBroadcastAddress();
+      const IPAddress globalBroadcast(255, 255, 255, 255);
+      sent |= sendUdpPacket(packet, packetLen, subnetBroadcast);
+      sent |= sendUdpPacket(packet, packetLen, globalBroadcast);
+    }
+    if (sendMulticast) {
+      sent |= sendUdpPacket(packet, packetLen, multicastAddr);
+    }
+
+    DEBUG_PRINTF("[FPP] Sync %u file=%s sec=%.3f mc=%u bc=%u\n",
+                 action, filename, secondsElapsed,
+                 sendMulticast ? 1 : 0,
+                 sendBroadcast ? 1 : 0);
+    return sent;
+  }
+
   void sendPingPacket(IPAddress destination = IPAddress(255, 255, 255, 255)) {
     uint8_t buf[301];
     memset(buf, 0, sizeof(buf));
@@ -424,9 +512,7 @@ private:
     String hwType = "WLED";
     for (int i = 0; i < 40; i++) buf[125 + i] = (i < hwType.length()) ? hwType[i] : 0;
     for (int i = 0; i < 120; i++) buf[166 + i] = 0;
-    AsyncUDP *txUdp = udpListenStarted ? &udpListen
-                                       : (udpMulticastStarted ? &udpMulticast : nullptr);
-    bool ok = txUdp ? txUdp->writeTo(buf, sizeof(buf), destination, udpPort) : false;
+    bool ok = sendUdpPacket(buf, sizeof(buf), destination);
     DEBUG_PRINTF("[FPP] Ping %s -> %s:%u len=%u\n",
                  ok ? "sent" : "FAILED",
                  destination.toString().c_str(),
@@ -490,6 +576,7 @@ private:
 
   void processUdpPacket(AsyncUDPPacket packet) {
     if (packet.length() < 7) return;
+    if (WiFi.status() == WL_CONNECTED && packet.remoteIP() == WiFi.localIP()) return;
     if (packet.data()[0] != 'F' || packet.data()[1] != 'P' ||
         packet.data()[2] != 'P' || packet.data()[3] != 'D') return;
 
@@ -672,6 +759,7 @@ public:
 
   void setup() {
     DEBUG_PRINTF("[%s] FPP Usermod loaded\n", _name);
+    FPP_usermodInstance() = this;
     server.on("/api/system/info", HTTP_GET, [this](AsyncWebServerRequest *request) {
       request->send(200, "application/json", buildSystemInfoJSON());
     });
@@ -839,5 +927,15 @@ public:
   void addToConfig(JsonObject &root) override {}
   bool readFromConfig(JsonObject &root) override { return true; }
 };
+
+inline bool FPP_sendEffectSyncMessage(uint8_t action, const String &fileName,
+                                      uint32_t currentFrame, float secondsElapsed,
+                                      bool sendMulticast, bool sendBroadcast) {
+  UsermodFPP *instance = FPP_usermodInstance();
+  return instance ? instance->sendSyncMessage(action, fileName, currentFrame,
+                                              secondsElapsed, sendMulticast,
+                                              sendBroadcast)
+                  : false;
+}
 
 inline const char UsermodFPP::_name[] PROGMEM = "FPP Connect";
