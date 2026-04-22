@@ -645,7 +645,9 @@ private:
       break;
     }
     case CTRL_PKT_PING:
-      queuePendingPingReply(packet.remoteIP());
+      if (packet.isBroadcast() || packet.isMulticast()) {
+        queuePendingPingReply(packet.remoteIP());
+      }
       break;
     case CTRL_PKT_BLANK:
       queuePendingCommand(PENDING_BLANK, nullptr, 0.0f, packet.remoteIP());
