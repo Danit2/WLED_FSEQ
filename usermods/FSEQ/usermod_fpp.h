@@ -135,9 +135,11 @@ private:
 
   portMUX_TYPE fppMux = portMUX_INITIALIZER_UNLOCKED;
   volatile PendingCommandType pendingCommand = PENDING_NONE;
+  volatile bool pendingPingReply = false;
   char pendingFileName[65] = {0};
   float pendingSecondsElapsed = 0.0f;
   IPAddress lastFppSenderIP = IPAddress(0, 0, 0, 0);
+  IPAddress pendingPingReplyIP = IPAddress(0, 0, 0, 0);
 
   float lastFppSyncSeconds = 0.0f;
   uint32_t lastFppSyncMillis = 0;
@@ -573,6 +575,13 @@ private:
 
     portEXIT_CRITICAL(&fppMux);
   }
+  
+  void queuePendingPingReply(IPAddress senderIP) {
+    portENTER_CRITICAL(&fppMux);
+    pendingPingReplyIP = senderIP;
+    pendingPingReply = true;
+    portEXIT_CRITICAL(&fppMux);
+  }
 
   void processUdpPacket(AsyncUDPPacket packet) {
     if (packet.length() < 7) return;
@@ -636,7 +645,7 @@ private:
       break;
     }
     case CTRL_PKT_PING:
-      sendPingPacket(packet.remoteIP());
+      queuePendingPingReply(packet.remoteIP());
       break;
     case CTRL_PKT_BLANK:
       queuePendingCommand(PENDING_BLANK, nullptr, 0.0f, packet.remoteIP());
@@ -864,6 +873,21 @@ public:
 
     startUdpIfNeeded();
     processPendingFppCommand();
+	
+    bool doPingReply = false;
+    IPAddress pingReplyIP;
+
+    portENTER_CRITICAL(&fppMux);
+    if (pendingPingReply) {
+      doPingReply = true;
+      pingReplyIP = pendingPingReplyIP;
+      pendingPingReply = false;
+    }
+    portEXIT_CRITICAL(&fppMux);
+
+    if (doPingReply && udpStarted && wifiNow == WL_CONNECTED) {
+      sendPingPacket(pingReplyIP);
+    }
 
     if (udpStarted && wifiNow == WL_CONNECTED) {
       if (announceBurstActive &&
