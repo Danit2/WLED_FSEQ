@@ -105,7 +105,7 @@ private:
   const IPAddress multicastAddr = IPAddress(239, 70, 80, 80);
   const uint16_t udpPort = 32320;
   unsigned long lastPingTime = 0;
-  const unsigned long pingInterval = 10000;
+  const unsigned long pingInterval = 30000;
   bool announceBurstActive = false;
   uint8_t announceBurstRemaining = 0;
   unsigned long lastAnnounceBurstTime = 0;
@@ -522,10 +522,10 @@ private:
 
   void sendDiscoveryBurst() {
     IPAddress subnetBroadcast = getBroadcastAddress();
-    IPAddress globalBroadcast(255, 255, 255, 255);
+    //IPAddress globalBroadcast(255, 255, 255, 255);
 
     sendPingPacket(subnetBroadcast);
-    sendPingPacket(globalBroadcast);
+    //sendPingPacket(globalBroadcast);
   }
 
   void queuePendingCommand(PendingCommandType cmd,
