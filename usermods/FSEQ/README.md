@@ -48,9 +48,9 @@ Example:
 
 | Index | File |
 |------:|------|
-| 0 | `/01-snow.fseq` |
-| 1 | `/02-christmas.fseq` |
-| 2 | `/10-finale.fseq` |
+| 0 | `/00-snow.fseq` |
+| 1 | `/01-christmas.fseq` |
+| 2 | `/02-finale.fseq` |
 
 ### Important local UI limitation
 
@@ -114,9 +114,11 @@ Current behavior:
 
 The code reacts to:
 
+- **START** packets
 - **SYNC** packets
 - **PING** packets
 - **BLANK** packets
+- **STOP** packets
 
 ### Realtime playback behavior
 
